@@ -1,65 +1,107 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import AgentAvatar from '@/components/AgentAvatar';
+import { agents } from '@/lib/agents';
+import { getProjects, createProject } from '@/lib/storage';
+import { Project, Agent } from '@/lib/types';
+import AgentInfoModal from '@/components/AgentInfoModal';
+
+export default function Dashboard() {
+  const router = useRouter();
+  const [input, setInput] = useState('');
+  const [recentProjects, setRecentProjects] = useState<Project[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+
+  useEffect(() => {
+    setRecentProjects(getProjects().slice(0, 3));
+  }, []);
+
+  const handleCreate = () => {
+    const name = input.trim() || '未命名项目';
+    const project = createProject(name);
+    router.push(`/project/${project.id}`);
+  };
+
+  const agentList = Object.values(agents);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="p-8 max-w-4xl mx-auto">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Atoms Demo</h1>
+          <p className="text-sm text-text-secondary">你的 AI 应用构建平台</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <div className="flex items-center gap-3">
+          <span className="text-xs bg-bg-card px-3 py-1.5 rounded-lg">积分: 100</span>
+          <button
+            onClick={() => {
+              const project = createProject('新项目');
+              router.push(`/project/${project.id}`);
+            }}
+            className="text-xs bg-primary text-white px-4 py-1.5 rounded-lg hover:bg-primary-hover transition-colors"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            新建项目
+          </button>
         </div>
-      </main>
+      </div>
+
+      {/* Agent Avatars */}
+      <div className="mb-8">
+        <p className="text-xs text-text-secondary mb-3">你的 AI 团队</p>
+        <div className="flex gap-3">
+          {agentList.map(agent => (
+            <AgentAvatar key={agent.id} agent={agent} size="md" showName onClick={() => setSelectedAgent(agent)} />
+          ))}
+        </div>
+      </div>
+
+      {/* Hero Input */}
+      <div className="bg-gradient-to-br from-bg-card to-[#16213e] rounded-xl p-6 mb-8">
+        <h2 className="text-xl font-semibold text-white mb-1">把想法变成产品</h2>
+        <p className="text-sm text-text-secondary mb-4">描述你的想法，AI 团队帮你构建</p>
+        <div className="flex gap-2">
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+            placeholder="描述你想构建的应用..."
+            className="flex-1 bg-bg-page border border-border rounded-lg px-4 py-3 text-sm text-white placeholder-text-tertiary focus:outline-none focus:border-primary"
+          />
+          <button
+            onClick={handleCreate}
+            className="bg-primary text-white px-6 py-3 rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors"
+          >
+            开始构建
+          </button>
+        </div>
+      </div>
+
+      {/* Recent Projects */}
+      {recentProjects.length > 0 && (
+        <div>
+          <p className="text-xs text-text-secondary mb-3">最近项目</p>
+          <div className="grid grid-cols-3 gap-4">
+            {recentProjects.map(project => (
+              <button
+                key={project.id}
+                onClick={() => router.push(`/project/${project.id}`)}
+                className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 text-left transition-colors"
+              >
+                <div className="h-12 bg-gradient-to-br from-primary/20 to-purple-500/20 rounded-lg mb-3" />
+                <p className="text-sm font-medium text-white truncate">{project.name}</p>
+                <p className="text-xs text-text-tertiary mt-1">
+                  {new Date(project.updatedAt).toLocaleDateString('zh-CN')}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <AgentInfoModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
     </div>
   );
 }
