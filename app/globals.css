@@ -1,26 +1,48 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg-page: #0a0a0f;
+  --color-bg-sidebar: #111118;
+  --color-bg-card: #1a1a2e;
+  --color-bg-hover: #252542;
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-border: #222222;
+  --color-text-primary: #e0e0e0;
+  --color-text-secondary: #888888;
+  --color-text-tertiary: #666666;
+  --color-agent-mike: #f59e0b;
+  --color-agent-emma: #10b981;
+  --color-agent-alex: #ef4444;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background-color: var(--color-bg-page);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg-sidebar);
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+/* Typing animation */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.typing-cursor::after {
+  content: '▊';
+  animation: blink 1s infinite;
+  color: var(--color-primary);
 }
