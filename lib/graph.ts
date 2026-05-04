@@ -396,6 +396,12 @@ async function singleCodeNode(state: typeof PipelineState.State) {
   const contextAddition = state.contextSummary ? `\n\n上下文摘要: ${state.contextSummary}` : '';
   const currentFiles = state.files || [];
 
+  // Detect fullstack intent from user input or existing project type
+  const backendKeywords = /后端|backend|api|数据库|服务端|server|认证|登录注册|增删改查|crud|flask|fastapi|django|python.*后端|完整.*功能/i;
+  const isFullstackIntent = backendKeywords.test(state.userInput);
+  const isExistingFullstack = state.projectType === 'fullstack';
+  const isFullstack = isFullstackIntent || isExistingFullstack;
+
   // Mode upgrade: engineer → team — run planner + QA on existing code
   if (state.userInput === '__MODE_UPGRADE__' && currentFiles.length > 0) {
     // This is handled by the mode_upgrade node instead
@@ -410,8 +416,10 @@ async function singleCodeNode(state: typeof PipelineState.State) {
       null, 2,
     );
 
+    const prompt = isFullstack ? SYSTEM_PROMPTS.modifierFullstack : SYSTEM_PROMPTS.modifier;
+
     const response = await llm.invoke([
-      new SystemMessage(SYSTEM_PROMPTS.modifier),
+      new SystemMessage(prompt),
       new HumanMessage(
         `当前项目文件:\n\`\`\`json\n${filesJson}\n\`\`\`\n\n修改指令: ${state.userInput}${contextAddition}\n\n请输出修改后的文件（JSON 格式，只输出变更的文件）。`
       ),
@@ -421,7 +429,8 @@ async function singleCodeNode(state: typeof PipelineState.State) {
     text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
     text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
 
-    const changedFilesMap = parseFileMap(text);
+    const parseFn = isFullstack ? parseFullstackFileMap : parseFileMap;
+    const changedFilesMap = parseFn(text);
 
     // Merge: update existing files, add new ones
     const updatedFiles = currentFiles.map(f => {
@@ -442,10 +451,25 @@ async function singleCodeNode(state: typeof PipelineState.State) {
       }
     }
 
-    return { files: updatedFiles, projectType: 'react-vite' };
+    return { files: updatedFiles, projectType: isFullstack ? 'fullstack' : 'react-vite' };
   }
 
   // New project generation
+  if (isFullstack) {
+    const response = await llm.invoke([
+      new SystemMessage(SYSTEM_PROMPTS.multiFileCodegenFullstack),
+      new HumanMessage(`用户需求: ${state.userInput}${contextAddition}`),
+    ]);
+
+    let text = (response.content as string).trim();
+    text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+    text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+    const filesMap = parseFullstackFileMap(text);
+    const files = buildFullstackProjectFiles(filesMap, 3100, 3200);
+    return { files, projectType: 'fullstack' };
+  }
+
   const response = await llm.invoke([
     new SystemMessage(SYSTEM_PROMPTS.codeStruct),
     new HumanMessage(`用户需求: ${state.userInput}${contextAddition}`),
