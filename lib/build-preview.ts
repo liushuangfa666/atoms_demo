@@ -32,8 +32,22 @@ export async function buildPreviewHtml(files: ProjectFile[]): Promise<string | n
     const fileMap = new Map(files.map(f => [f.path, f.content]));
     const resolveDir = process.cwd();
 
-    const appPath = files.find(f => f.path === 'src/App.jsx' || f.path === 'src/App.tsx')?.path;
+    // Find App entry point — check both root-level and frontend/ prefix
+    const appPath = files.find(f =>
+      f.path === 'src/App.jsx' || f.path === 'src/App.tsx' ||
+      f.path === 'frontend/src/App.jsx' || f.path === 'frontend/src/App.tsx'
+    )?.path;
     if (!appPath) return null;
+
+    // For fullstack projects, only use frontend/ files for preview
+    const isFrontend = appPath.startsWith('frontend/');
+    const previewFiles = isFrontend
+      ? files.filter(f => f.path.startsWith('frontend/')).map(f => ({
+          ...f,
+          path: f.path.replace(/^frontend\//, ''),
+        }))
+      : files;
+    const previewFileMap = new Map(previewFiles.map(f => [f.path, f.content]));
 
     // Strip imports of libraries that we stub — the AI code imports them but we replace with stubs
     const stripBadImports: esbuild.Plugin = {
@@ -71,9 +85,10 @@ export async function buildPreviewHtml(files: ProjectFile[]): Promise<string | n
     };
 
     // Synthesized entry — render App into #root
+    const entryAppPath = isFrontend ? appPath.replace('frontend/', '') : appPath;
     const entryContent = `import React from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './${appPath}';
+import App from './${entryAppPath}';
 createRoot(document.getElementById('root')).render(React.createElement(App));
 `;
 
@@ -88,7 +103,7 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
         // Resolve relative imports within virtual FS
         build.onResolve({ filter: /^\./ }, (args) => {
           if (args.namespace !== VIRTUAL_NS) return null;
-          const resolved = resolveRelative(args.importer, args.path, fileMap);
+          const resolved = resolveRelative(args.importer, args.path, previewFileMap);
           if (resolved) return { path: resolved, namespace: VIRTUAL_NS };
           return null;
         });
@@ -98,7 +113,7 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
           if (args.path === VIRTUAL_ENTRY) {
             return { contents: entryContent, loader: 'jsx', resolveDir };
           }
-          const content = fileMap.get(args.path);
+          const content = previewFileMap.get(args.path);
           if (content !== undefined) {
             const ext = args.path.split('.').pop() || '';
             const loader: esbuild.Loader = ['jsx', 'tsx'].includes(ext) ? 'jsx' : 'js';
