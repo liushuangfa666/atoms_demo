@@ -13,7 +13,7 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   // Hide sidebar on project editor pages
-  if (pathname.startsWith('/project/')) return null;
+  if (pathname.startsWith('/project/') || pathname.startsWith('/showcase/')) return null;
 
   return (
     <aside className="w-16 bg-bg-sidebar flex flex-col items-center py-4 gap-2 border-r border-border">

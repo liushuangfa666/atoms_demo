@@ -1,13 +1,45 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 interface Props {
-  code: string;
+  mode: 'legacy' | 'webcontainer';
+  code?: string;
+  previewUrl?: string | null;
+  isLoading?: boolean;
 }
 
-export default function PreviewPanel({ code }: Props) {
+export default function PreviewPanel({ mode, code, previewUrl, isLoading }: Props) {
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [legacyUrl, setLegacyUrl] = useState('');
+  const prevUrlRef = useRef('');
+
+  // Legacy mode: POST HTML to API route
+  useEffect(() => {
+    if (mode !== 'legacy' || !code) {
+      setLegacyUrl('');
+      return;
+    }
+
+    let cancelled = false;
+    const html = code.replace(
+      /(<script\s+src=["'])https:\/\/cdn\.tailwindcss\.com\/?["']/g,
+      '$1/tailwind.js"'
+    );
+
+    fetch('/api/preview', { method: 'POST', body: html })
+      .then(r => r.json())
+      .then(({ id }) => {
+        if (!cancelled) {
+          const url = `/api/preview?id=${id}`;
+          prevUrlRef.current = url;
+          setLegacyUrl(url);
+        }
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [mode, code]);
 
   const content = (
     <div className="h-full flex flex-col bg-white rounded-lg overflow-hidden">
@@ -27,10 +59,22 @@ export default function PreviewPanel({ code }: Props) {
         </button>
       </div>
       {/* iframe */}
-      {code ? (
+      {isLoading ? (
+        <div className="flex-1 flex items-center justify-center bg-[#f8fafc]">
+          <div className="text-center">
+            <div className="text-2xl mb-2 animate-spin">⚙️</div>
+            <p className="text-sm text-[#94a3b8]">安装依赖中...</p>
+          </div>
+        </div>
+      ) : mode === 'webcontainer' && previewUrl ? (
         <iframe
-          sandbox="allow-scripts"
-          srcDoc={code}
+          src={previewUrl}
+          className="flex-1 w-full border-none"
+          title="Preview"
+        />
+      ) : mode === 'legacy' && legacyUrl ? (
+        <iframe
+          src={legacyUrl}
           className="flex-1 w-full border-none"
           title="Preview"
         />

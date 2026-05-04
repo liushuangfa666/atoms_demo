@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import AgentAvatar from '@/components/AgentAvatar';
+import PreviewThumbnail from '@/components/PreviewThumbnail';
 import { agents } from '@/lib/agents';
 import { getProjects, createProject } from '@/lib/storage';
 import { Project, Agent } from '@/lib/types';
@@ -11,17 +12,22 @@ import AgentInfoModal from '@/components/AgentInfoModal';
 export default function Dashboard() {
   const router = useRouter();
   const [input, setInput] = useState('');
+  const [mode, setMode] = useState<'engineer' | 'team'>('engineer');
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
 
   useEffect(() => {
-    setRecentProjects(getProjects().slice(0, 3));
+    getProjects().then(projects => setRecentProjects(projects.slice(0, 3)));
   }, []);
 
-  const handleCreate = () => {
-    const name = input.trim() || '未命名项目';
-    const project = createProject(name);
-    router.push(`/project/${project.id}`);
+  const handleCreate = async () => {
+    const prompt = input.trim();
+    const name = prompt || '未命名项目';
+    const project = await createProject(name, mode);
+    const url = prompt
+      ? `/project/${project.id}?prompt=${encodeURIComponent(prompt)}`
+      : `/project/${project.id}`;
+    router.push(url);
   };
 
   const agentList = Object.values(agents);
@@ -37,8 +43,8 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <span className="text-xs bg-bg-card px-3 py-1.5 rounded-lg">积分: 100</span>
           <button
-            onClick={() => {
-              const project = createProject('新项目');
+            onClick={async () => {
+              const project = await createProject('新项目', mode);
               router.push(`/project/${project.id}`);
             }}
             className="text-xs bg-primary text-white px-4 py-1.5 rounded-lg hover:bg-primary-hover transition-colors"
@@ -77,6 +83,29 @@ export default function Dashboard() {
             开始构建
           </button>
         </div>
+        <div className="flex items-center gap-3 mt-3">
+          <span className="text-xs text-text-tertiary">模式：</span>
+          <button
+            onClick={() => setMode('engineer')}
+            className={`text-xs px-3 py-1 rounded-full transition-colors ${
+              mode === 'engineer'
+                ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
+                : 'text-text-tertiary hover:text-white'
+            }`}
+          >
+            工程师模式 · 快速省Token
+          </button>
+          <button
+            onClick={() => setMode('team')}
+            className={`text-xs px-3 py-1 rounded-full transition-colors ${
+              mode === 'team'
+                ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
+                : 'text-text-tertiary hover:text-white'
+            }`}
+          >
+            团队模式 · 多Agent协作
+          </button>
+        </div>
       </div>
 
       {/* Recent Projects */}
@@ -87,10 +116,18 @@ export default function Dashboard() {
             {recentProjects.map(project => (
               <button
                 key={project.id}
-                onClick={() => router.push(`/project/${project.id}`)}
+                onClick={() => { router.push(`/project/${project.id}`); }}
                 className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 text-left transition-colors"
               >
-                <div className="h-12 bg-gradient-to-br from-primary/20 to-purple-500/20 rounded-lg mb-3" />
+                {project.currentCode ? (
+                  <div className="mb-3">
+                    <PreviewThumbnail code={project.currentCode} scale={0.112} />
+                  </div>
+                ) : (
+                  <div className="h-20 bg-gradient-to-br from-primary/20 to-purple-500/20 rounded-lg mb-3 flex items-center justify-center">
+                    <span className="text-2xl">📝</span>
+                  </div>
+                )}
                 <p className="text-sm font-medium text-white truncate">{project.name}</p>
                 <p className="text-xs text-text-tertiary mt-1">
                   {new Date(project.updatedAt).toLocaleDateString('zh-CN')}

@@ -5,18 +5,53 @@ import { useRouter } from 'next/navigation';
 import { getProjects, deleteProject } from '@/lib/storage';
 import { Project } from '@/lib/types';
 
+function ProjectThumbnail({ code }: { code: string }) {
+  if (!code) {
+    return (
+      <div className="w-full h-full bg-gradient-to-br from-primary/20 to-purple-500/20 flex items-center justify-center">
+        <span className="text-2xl">📝</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-full overflow-hidden relative bg-white">
+      <div
+        className="origin-top-left"
+        style={{
+          width: '800px',
+          height: '500px',
+          transform: 'scale(0.2)',
+          transformOrigin: 'top left',
+        }}
+      >
+        <iframe
+          sandbox="allow-scripts"
+          srcDoc={code}
+          className="w-full h-full border-none"
+          title="Preview"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectsPage() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setProjects(getProjects());
+    getProjects().then(data => {
+      setProjects(data);
+      setLoading(false);
+    });
   }, []);
 
-  const handleDelete = (id: string, e: React.MouseEvent) => {
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    deleteProject(id);
-    setProjects(getProjects());
+    await deleteProject(id);
+    setProjects(prev => prev.filter(p => p.id !== id));
   };
 
   return (
@@ -31,7 +66,11 @@ export default function ProjectsPage() {
         </button>
       </div>
 
-      {projects.length === 0 ? (
+      {loading ? (
+        <div className="text-center py-20">
+          <p className="text-sm text-text-secondary">加载中...</p>
+        </div>
+      ) : projects.length === 0 ? (
         <div className="text-center py-20">
           <div className="text-4xl mb-3">📁</div>
           <p className="text-sm text-text-secondary">还没有项目</p>
@@ -42,15 +81,11 @@ export default function ProjectsPage() {
           {projects.map(project => (
             <div
               key={project.id}
-              onClick={() => router.push(`/project/${project.id}`)}
+              onClick={() => { router.push(`/project/${project.id}`); }}
               className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 cursor-pointer transition-colors group relative"
             >
-              <div className="h-20 bg-gradient-to-br from-primary/20 to-purple-500/20 rounded-lg mb-3 flex items-center justify-center">
-                {project.currentCode ? (
-                  <span className="text-2xl">✅</span>
-                ) : (
-                  <span className="text-2xl">📝</span>
-                )}
+              <div className="h-28 rounded-lg mb-3 overflow-hidden">
+                <ProjectThumbnail code={project.currentCode} />
               </div>
               <p className="text-sm font-medium text-white truncate">{project.name}</p>
               <div className="flex justify-between items-center mt-1">
@@ -63,7 +98,7 @@ export default function ProjectsPage() {
               </div>
               <button
                 onClick={e => handleDelete(project.id, e)}
-                className="absolute top-2 right-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                className="absolute top-2 right-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs z-10"
               >
                 ✕
               </button>

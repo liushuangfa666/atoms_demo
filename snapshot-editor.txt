@@ -1,0 +1,61 @@
+uid=5_0 RootWebArea "Atoms Demo — AI App Builder" url="http://localhost:3002/project/moojmi8uetxlz08wyrf"
+  uid=5_1 main
+    uid=5_2 button "← 返回"
+    uid=5_3 StaticText "我想要一个帮我学习算法题的应用"
+    uid=5_4 button "工程师" description="单Agent模式，速度更快，Token消耗更少"
+    uid=5_5 button "团队" description="多Agent协作模式，质量更高，Token消耗更多"
+    uid=5_6 StaticText "单Agent · 快速"
+    uid=5_7 StaticText "2026/5/3"
+    uid=5_8 StaticText "U"
+    uid=5_9 StaticText "我想要一个帮我学习算法题的应用"
+    uid=5_10 button "M"
+    uid=5_11 StaticText "Mike"
+    uid=5_12 StaticText "请求超时，请重试。如果使用团队模式，可以尝试切换到工程师模式以获得更快的响应。"
+    uid=5_13 StaticText "U"
+    uid=5_14 StaticText "我想要一个帮我学习算法题的应用"
+    uid=5_15 button "M"
+    uid=5_16 StaticText "Mike"
+    uid=5_17 StaticText "🔍 分析为新需求，启动团队..."
+    uid=5_18 button "E"
+    uid=5_19 StaticText "Emma"
+    uid=5_20 StaticText "功能模块：
+1. 题库管理 - 收录算法题目，按类型（数组、链表、树等）和难度（简单/中等/困难）分类
+2. 学习路径 - 根据用户水平推荐刷题顺序，提供循序渐进的学习计划
+3. 代码编辑器 - 支持在线编写代码，多语言支持（Python/Java/C++）
+4. 题解中心 - 提供题目的思路分析、参考代码和复杂度讲解
+5. 练习记录 - 记录做题历史、正确率统计和能力雷达图
+6. 搜索筛选 - 支持按关键字、难度、类型等条件筛选题目
+
+交互流程：
+用户注册/登录 → 水平测试（可选）或直接选择学习目标 → 首页浏览推荐题目或通过搜索筛选题目 → 点击题目进入详情页查看描述和示例 → 在代码编辑器编写代码 → 运行代码查看测试结果 → 正确则解锁下一题/错误可查看提示或题解 → 完成后更新练习记录和能力评估"
+    uid=5_21 button "M"
+    uid=5_22 StaticText "Mike"
+    uid=5_23 StaticText "请求超时，请重试。如果使用团队模式，可以尝试切换到工程师模式以获得更快的响应。"
+    uid=6_0 StaticText "U"
+    uid=6_1 StaticText "做一个简单的待办事项应用"
+    uid=6_2 button "A"
+    uid=6_3 StaticText "Alex"
+    uid=6_4 StaticText "✅ 代码已生成，请在右侧预览面板查看效果。"
+    uid=5_24 textbox "输入你的需求..."
+    uid=5_25 button "发送" disableable disabled
+    uid=5_26 StaticText "预览"
+    uid=5_27 button "⛶"
+    uid=6_5 Iframe "Preview"
+      uid=6_6 RootWebArea "待办事项" url="about:srcdoc"
+        uid=7_0 heading "待办事项" level="1"
+        uid=7_1 StaticText "记录每一天的小目标"
+        uid=7_2 textbox "添加新的待办事项..."
+        uid=7_3 button
+        uid=7_4 StaticText "已完成"
+        uid=7_5 StaticText "0"
+        uid=7_6 StaticText "/"
+        uid=7_7 StaticText "0"
+        uid=7_8 button "清除已完成"
+        uid=7_9 button "全部"
+        uid=7_10 button "未完成"
+        uid=7_11 button "已完成"
+        uid=7_12 StaticText "还没有待办事项"
+        uid=7_13 StaticText "添加一个开始计划吧"
+        uid=7_14 StaticText "数据将自动保存到本地存储"
+  uid=5_30 button "Open Next.js Dev Tools" expandable haspopup="menu"
+  uid=5_31 alert atomic live="assertive" relevant="additions text"

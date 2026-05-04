@@ -1,23 +1,39 @@
-import { StateGraph, Annotation, END, START } from "@langchain/langgraph";
+import { StateGraph, Annotation, END, START, MemorySaver } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
-import { SystemMessage, HumanMessage } from "@langchain/core/messages";
+import { SystemMessage, HumanMessage, BaseMessage } from "@langchain/core/messages";
 import { SYSTEM_PROMPTS } from "./agents";
+import { ProjectFile, QAResult } from "./types";
+import { trimToolCallContent } from './context-manager';
+import { buildProjectFiles, parseFileMap, getBaseFiles } from './react-template';
 
-// Define pipeline state
+// ── State ──────────────────────────────────────────────
+
 const PipelineState = Annotation.Root({
+  messages: Annotation<BaseMessage[]>,
   userInput: Annotation<string>,
-  mikeResponse: Annotation<string>,
-  emmaResponse: Annotation<string>,
-  alexResponse: Annotation<string>,
+  currentCode: Annotation<string>,
   htmlCode: Annotation<string>,
+  plan: Annotation<string>,
+  route: Annotation<string>,
+  reviewResult: Annotation<string>,
+  retryCount: Annotation<number>,
+  chatResponse: Annotation<string>,
+  mode: Annotation<string>,
+  files: Annotation<ProjectFile[]>,
+  projectType: Annotation<string>,
+  qaResults: Annotation<QAResult[]>,
+  contextSummary: Annotation<string>,
 });
 
-// Create MiniMax LLM via OpenAI-compatible interface
-function createLLM() {
+// ── LLM helpers ────────────────────────────────────────
+
+function createLLM(maxTokens = 8192, modelName = "MiniMax-M2.7", timeout = 120_000) {
   return new ChatOpenAI({
-    modelName: "MiniMax-Text-01",
+    modelName,
     temperature: 0.7,
-    maxTokens: 8192,
+    maxTokens,
+    timeout,
+    streaming: true,
     configuration: {
       baseURL: "https://api.minimax.chat/v1",
       apiKey: process.env.MINIMAX_API_KEY,
@@ -25,52 +41,560 @@ function createLLM() {
   });
 }
 
-// Node 1: Mike analyzes user request
-async function mikeNode(state: typeof PipelineState.State) {
-  const llm = createLLM();
+const fastLLM = () => createLLM(16384, "MiniMax-M2.7-highspeed");
+
+// Helper: get trimmed plan for context (30-40-30 split)
+function getPlanForContext(plan: string, contextSummary?: string): string {
+  if (contextSummary) return contextSummary;
+  return trimToolCallContent(plan || '');
+}
+
+// ── Node 1: Router ─────────────────────────────────────
+
+async function routerNode(state: typeof PipelineState.State) {
+  const llm = createLLM(64);
+  const historySummary = state.currentCode
+    ? "（当前项目已有代码）"
+    : "（当前项目还没有代码）";
+
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPTS.mike),
+    new SystemMessage(SYSTEM_PROMPTS.router),
+    new HumanMessage(`用户消息: ${state.userInput}\n\n上下文: ${historySummary}\n\n对话历史条数: ${state.messages.length}`),
+  ]);
+
+  let route = (response.content as string).trim().toLowerCase();
+
+  // Fallback logic
+  if (!["new_request", "modify", "question"].includes(route)) {
+    route = state.currentCode ? "modify" : "new_request";
+  }
+  if (route === "modify" && !state.currentCode) {
+    route = "new_request";
+  }
+
+  // Determine project type with keyword check + LLM fallback
+  let projectType = 'simple';
+  const backendKeywords = /后端|backend|api|数据库|服务端|server|认证|登录注册|增删改查|crud|flask|fastapi|django|python.*后端|完整.*功能/i;
+  if (backendKeywords.test(state.userInput)) {
+    projectType = 'fullstack';
+  } else if (route !== 'question') {
+    // Use LLM for ambiguous cases
+    const typeResponse = await llm.invoke([
+      new SystemMessage(SYSTEM_PROMPTS.projectType),
+      new HumanMessage(`用户消息: ${state.userInput}`),
+    ]);
+    const typeText = (typeResponse.content as string).trim().toLowerCase();
+    if (typeText.includes('fullstack')) projectType = 'fullstack';
+  }
+
+  return { route, projectType };
+}
+
+// ── Node 2: Planner ────────────────────────────────────
+
+async function plannerNode(state: typeof PipelineState.State) {
+  const llm = createLLM(4096);
+  const response = await llm.invoke([
+    new SystemMessage(SYSTEM_PROMPTS.planner),
+    new HumanMessage(`用户需求: ${state.userInput}\n\n请分析需求并输出 JSON。`),
+  ]);
+
+  let text = (response.content as string).trim();
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed.need_clarification) {
+      return { plan: "", chatResponse: parsed.question, route: "need_input" };
+    }
+    return { plan: parsed.plan, chatResponse: "" };
+  } catch {
+    return { plan: text, chatResponse: "" };
+  }
+}
+
+// ── Node 3: Code struct (React project) ────────────────────
+
+async function codeStructNode(state: typeof PipelineState.State) {
+  const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+
+  // Include QA feedback on retry so codegen can fix issues
+  let qaFeedback = '';
+  if (state.retryCount > 0 && state.qaResults && state.qaResults.length > 0) {
+    const errorItems = state.qaResults.filter(r => r.severity === 'error');
+    if (errorItems.length > 0) {
+      qaFeedback = `\n\n⚠️ QA 审查发现以下问题，请务必修复：\n${errorItems.map(r => `- [${r.category}] ${r.message}${r.suggestion ? `（建议：${r.suggestion}）` : ''}`).join('\n')}`;
+    }
+  }
+
+  const response = await llm.invoke([
+    new SystemMessage(SYSTEM_PROMPTS.codeStruct),
+    new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${qaFeedback}`),
+  ]);
+
+  let text = (response.content as string).trim();
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+  const filesMap = parseFileMap(text);
+  const files = buildProjectFiles(
+    filesMap['src/App.jsx'] || '',
+    filesMap['src/App.jsx'] ? Object.fromEntries(Object.entries(filesMap).filter(([k]) => k !== 'src/App.jsx')) : undefined,
+  );
+
+  return { files, projectType: 'react-vite' };
+}
+
+// ── Node 4: Multi-file codegen (React multi-component) ────
+
+async function multiFileCodegenNode(state: typeof PipelineState.State) {
+  const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+
+  let qaFeedback = '';
+  if (state.retryCount > 0 && state.qaResults && state.qaResults.length > 0) {
+    const errorItems = state.qaResults.filter(r => r.severity === 'error');
+    if (errorItems.length > 0) {
+      qaFeedback = `\n\n⚠️ QA 审查发现以下问题，请务必修复：\n${errorItems.map(r => `- [${r.category}] ${r.message}${r.suggestion ? `（建议：${r.suggestion}）` : ''}`).join('\n')}`;
+    }
+  }
+
+  const response = await llm.invoke([
+    new SystemMessage(SYSTEM_PROMPTS.multiFileCodegen),
+    new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${qaFeedback}`),
+  ]);
+
+  let text = (response.content as string).trim();
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+  const filesMap = parseFileMap(text);
+
+  if (Object.keys(filesMap).length === 0) {
+    // Fallback: wrap as App.jsx
+    const files = buildProjectFiles(text);
+    return { files, projectType: 'react-vite' };
+  }
+
+  // Merge with base template
+  const baseFiles = getBaseFiles();
+  const allFiles: Record<string, string> = { ...baseFiles, ...filesMap };
+  const langMap: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    html: 'html', css: 'css', json: 'json', md: 'markdown',
+  };
+
+  const files: ProjectFile[] = Object.entries(allFiles).map(([path, content]) => ({
+    path,
+    content: String(content),
+    language: langMap[path.split('.').pop() || ''] || 'text',
+  }));
+
+  return { files, projectType: 'react-vite' };
+}
+
+// ── Code cleanup (kept for legacy compatibility) ────────
+
+function cleanCodeOutput(text: string): string {
+  let clean = text.replace(/<think[\s\S]*?<\/think>/gi, '');
+  clean = clean.replace(/```html\n?/gi, '').replace(/```\n?/g, '');
+  return clean.trim();
+}
+
+// ── Node 5: Merge ──────────────────────────────────────
+
+function mergeNode(state: typeof PipelineState.State) {
+  // For React projects, files are already in the correct format
+  if (state.files && state.files.length > 0) {
+    return { files: state.files, projectType: state.projectType || 'react-vite' };
+  }
+
+  // Fallback: wrap any leftover htmlCode in a React project
+  if (state.htmlCode) {
+    const files = buildProjectFiles(
+      `<div dangerouslySetInnerHTML={{ __html: \`${state.htmlCode.replace(/`/g, '\\`')}\` }} />`,
+    );
+    return { files, projectType: 'react-vite' };
+  }
+
+  return { files: [], projectType: 'react-vite' };
+}
+
+// ── Node 6: QA Reviewer ────────────────────────────────
+
+async function qaReviewerNode(state: typeof PipelineState.State) {
+  const files = state.files || [];
+  const results: QAResult[] = [];
+
+  if (files.length === 0) {
+    return {
+      qaResults: [{ severity: 'error', category: 'functionality', message: '没有生成代码' }],
+      reviewResult: 'fail:没有生成代码',
+    };
+  }
+
+  // Check for required React files
+  const hasAppJsx = files.some(f => f.path === 'src/App.jsx' || f.path === 'src/App.tsx');
+  if (!hasAppJsx) {
+    results.push({ severity: 'error', category: 'functionality', message: '缺少 src/App.jsx 主组件文件', suggestion: '生成 App.jsx 文件' });
+  }
+
+  const hasPackageJson = files.some(f => f.path === 'package.json');
+  if (!hasPackageJson) {
+    results.push({ severity: 'warning', category: 'style', message: '缺少 package.json', suggestion: '系统会自动补充' });
+  }
+
+  // Security checks
+  const allCode = files.map(f => f.content).join('\n');
+  if (allCode.includes('dangerouslySetInnerHTML') && allCode.includes('window.location')) {
+    results.push({ severity: 'warning', category: 'security', message: '检测到 dangerouslySetInnerHTML 使用', suggestion: '确保内容是可信的，不包含用户输入' });
+  }
+
+  // Content check — App.jsx should have meaningful code
+  const appFile = files.find(f => f.path === 'src/App.jsx');
+  if (appFile && appFile.content.length < 100) {
+    results.push({ severity: 'error', category: 'functionality', message: 'App.jsx 内容过少，可能生成不完整', file: 'src/App.jsx' });
+  }
+
+  // Tier 2: LLM-powered review (only if we have a plan)
+  if (state.plan && appFile && appFile.content.length > 50) {
+    try {
+      const llm = createLLM(2048);
+      const codeSnippet = appFile.content.length > 3000
+        ? appFile.content.substring(0, 3000) + '\n... (truncated)'
+        : appFile.content;
+
+      const response = await llm.invoke([
+        new SystemMessage(SYSTEM_PROMPTS.qaReviewer),
+        new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n生成的 React 代码:\n${codeSnippet}\n\n请检查代码是否实现了规划中的功能。`),
+      ]);
+
+      let qaText = (response.content as string).trim();
+      qaText = qaText.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+      qaText = qaText.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+      const jsonMatch = qaText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.results && Array.isArray(parsed.results)) {
+          for (const r of parsed.results) {
+            results.push({
+              severity: r.severity || 'info',
+              category: r.category || 'functionality',
+              message: r.message || '',
+              file: r.file,
+              suggestion: r.suggestion,
+            });
+          }
+        }
+      }
+    } catch {
+      // LLM review failed, static results still valid
+    }
+  }
+
+  const hasErrors = results.some(r => r.severity === 'error');
+  return {
+    qaResults: results,
+    reviewResult: hasErrors ? `fail:${results.filter(r => r.severity === 'error').map(r => r.message).join('; ')}` : 'pass',
+    retryCount: (state.retryCount || 0) + 1,
+  };
+}
+
+// ── Node 7: Modifier ───────────────────────────────────
+
+async function modifierNode(state: typeof PipelineState.State) {
+  const llm = fastLLM();
+  const contextAddition = state.contextSummary ? `\n\n上下文摘要: ${state.contextSummary}` : '';
+
+  // Build current file context
+  const currentFiles = state.files || [];
+  const filesJson = currentFiles.length > 0
+    ? JSON.stringify(Object.fromEntries(currentFiles.map(f => [f.path, f.content])), null, 2)
+    : '{}';
+
+  const response = await llm.invoke([
+    new SystemMessage(SYSTEM_PROMPTS.modifier),
+    new HumanMessage(
+      `当前项目文件:\n\`\`\`json\n${filesJson}\n\`\`\`\n\n修改指令: ${state.userInput}${contextAddition}\n\n请输出修改后的文件（JSON 格式）。`
+    ),
+  ]);
+
+  let text = (response.content as string).trim();
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+  const changedFilesMap = parseFileMap(text);
+
+  // Merge changed files with existing files
+  const updatedFiles = currentFiles.map(f => {
+    if (changedFilesMap[f.path] !== undefined) {
+      return { ...f, content: changedFilesMap[f.path] };
+    }
+    return f;
+  });
+
+  // Add any new files
+  for (const [path, content] of Object.entries(changedFilesMap)) {
+    if (!updatedFiles.some(f => f.path === path)) {
+      const ext = path.split('.').pop() || '';
+      const langMap: Record<string, string> = {
+        ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+        html: 'html', css: 'css', json: 'json', md: 'markdown',
+      };
+      updatedFiles.push({ path, content, language: langMap[ext] || 'text' });
+    }
+  }
+
+  return { files: updatedFiles, projectType: state.projectType || 'react-vite' };
+}
+
+// ── Node 8: ChatAgent ──────────────────────────────────
+
+async function chatAgentNode(state: typeof PipelineState.State) {
+  const llm = createLLM(2048);
+  const response = await llm.invoke([
+    new SystemMessage(SYSTEM_PROMPTS.chatAgent),
     new HumanMessage(state.userInput),
   ]);
-  return { mikeResponse: response.content as string };
+  return { chatResponse: response.content as string };
 }
 
-// Node 2: Emma creates product plan
-async function emmaNode(state: typeof PipelineState.State) {
-  const llm = createLLM();
+// ── Node 9: Single agent code generator (engineer mode) ─
+
+async function singleCodeNode(state: typeof PipelineState.State) {
+  const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+  const contextAddition = state.contextSummary ? `\n\n上下文摘要: ${state.contextSummary}` : '';
+  const currentFiles = state.files || [];
+
+  // Mode upgrade: engineer → team — run planner + QA on existing code
+  if (state.userInput === '__MODE_UPGRADE__' && currentFiles.length > 0) {
+    // This is handled by the mode_upgrade node instead
+    return { files: currentFiles, projectType: state.projectType || 'react-vite' };
+  }
+
+  // Check if modifying existing project or creating new
+  if (currentFiles.length > 0 && state.currentCode) {
+    // Modification: send current files + instruction
+    const filesJson = JSON.stringify(
+      Object.fromEntries(currentFiles.map(f => [f.path, f.content])),
+      null, 2,
+    );
+
+    const response = await llm.invoke([
+      new SystemMessage(SYSTEM_PROMPTS.modifier),
+      new HumanMessage(
+        `当前项目文件:\n\`\`\`json\n${filesJson}\n\`\`\`\n\n修改指令: ${state.userInput}${contextAddition}\n\n请输出修改后的文件（JSON 格式，只输出变更的文件）。`
+      ),
+    ]);
+
+    let text = (response.content as string).trim();
+    text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+    text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+    const changedFilesMap = parseFileMap(text);
+
+    // Merge: update existing files, add new ones
+    const updatedFiles = currentFiles.map(f => {
+      if (changedFilesMap[f.path] !== undefined) {
+        return { ...f, content: changedFilesMap[f.path] };
+      }
+      return f;
+    });
+
+    for (const [path, content] of Object.entries(changedFilesMap)) {
+      if (!updatedFiles.some(f => f.path === path)) {
+        const ext = path.split('.').pop() || '';
+        const langMap: Record<string, string> = {
+          ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+          html: 'html', css: 'css', json: 'json', md: 'markdown',
+        };
+        updatedFiles.push({ path, content, language: langMap[ext] || 'text' });
+      }
+    }
+
+    return { files: updatedFiles, projectType: 'react-vite' };
+  }
+
+  // New project generation
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPTS.emma),
-    new HumanMessage(`用户需求: ${state.userInput}\n\nMike的分析: ${state.mikeResponse}`),
-  ]);
-  return { emmaResponse: response.content as string };
-}
-
-// Node 3: Alex generates code
-async function alexNode(state: typeof PipelineState.State) {
-  const llm = createLLM();
-  const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPTS.alex),
-    new HumanMessage(`用户需求: ${state.userInput}\n\n产品规划:\n${state.emmaResponse}`),
+    new SystemMessage(SYSTEM_PROMPTS.codeStruct),
+    new HumanMessage(`用户需求: ${state.userInput}${contextAddition}`),
   ]);
 
-  const text = response.content as string;
-  // Extract HTML from response
-  const htmlMatch = text.match(/<!DOCTYPE html>[\s\S]*<\/html>/i) ||
-                    text.match(/<html[\s\S]*<\/html>/i);
-  const htmlCode = htmlMatch ? htmlMatch[0] : text;
+  let text = (response.content as string).trim();
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
 
-  return { alexResponse: text, htmlCode };
+  const filesMap = parseFileMap(text);
+  const files = buildProjectFiles(
+    filesMap['src/App.jsx'] || filesMap[Object.keys(filesMap)[0]] || '',
+    filesMap['src/App.jsx'] ? Object.fromEntries(Object.entries(filesMap).filter(([k]) => k !== 'src/App.jsx')) : undefined,
+  );
+
+  return { files, projectType: 'react-vite' };
 }
 
-// Build the graph: Mike → Emma → Alex
+// ── Node 10: Mode upgrade (engineer → team) ────────────
+
+async function modeUpgradeNode(state: typeof PipelineState.State) {
+  const currentFiles = state.files || [];
+
+  // Step 1: Run planner analysis on existing code
+  const llm = createLLM(4096);
+  const filesSummary = currentFiles.map(f => `${f.path} (${f.content.length} chars)`).join(', ');
+
+  const planResponse = await llm.invoke([
+    new SystemMessage(SYSTEM_PROMPTS.planner),
+    new HumanMessage(
+      `以下项目已完成初步开发，请作为规划师审查现有代码结构并给出改进建议：\n\n项目文件: ${filesSummary}\n用户原始需求: ${state.contextSummary || state.userInput}\n\n请分析架构是否合理，是否有改进空间，输出 JSON 格式。`
+    ),
+  ]);
+
+  let planText = (planResponse.content as string).trim();
+  planText = planText.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  planText = planText.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+  let plan = planText;
+  try {
+    const parsed = JSON.parse(planText);
+    plan = parsed.plan || planText;
+  } catch { /* keep raw text */ }
+
+  // Step 2: Run QA review
+  const results: QAResult[] = [];
+  const appFile = currentFiles.find(f => f.path === 'src/App.jsx');
+
+  if (appFile) {
+    try {
+      const qaLlm = createLLM(2048);
+      const codeSnippet = appFile.content.length > 3000
+        ? appFile.content.substring(0, 3000) + '\n... (truncated)'
+        : appFile.content;
+
+      const qaResponse = await qaLlm.invoke([
+        new SystemMessage(SYSTEM_PROMPTS.qaReviewer),
+        new HumanMessage(`请审查以下 React 代码的质量和最佳实践：\n\n${codeSnippet}\n\n输出 JSON 格式的检查结果。`),
+      ]);
+
+      let qaText = (qaResponse.content as string).trim();
+      qaText = qaText.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+      qaText = qaText.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+      const jsonMatch = qaText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.results && Array.isArray(parsed.results)) {
+          for (const r of parsed.results) {
+            results.push({
+              severity: r.severity || 'info',
+              category: r.category || 'functionality',
+              message: r.message || '',
+              file: r.file,
+              suggestion: r.suggestion,
+            });
+          }
+        }
+      }
+    } catch { /* QA review failed */ }
+  }
+
+  const hasErrors = results.some(r => r.severity === 'error');
+  return {
+    plan,
+    qaResults: results,
+    reviewResult: hasErrors ? 'fail' : 'pass',
+    files: currentFiles,
+    projectType: state.projectType || 'react-vite',
+  };
+}
+
+// ── Build Graph ────────────────────────────────────────
+
 const builder = new StateGraph(PipelineState)
-  .addNode("mike", mikeNode)
-  .addNode("emma", emmaNode)
-  .addNode("alex", alexNode)
-  .addEdge(START, "mike")
-  .addEdge("mike", "emma")
-  .addEdge("emma", "alex")
-  .addEdge("alex", END);
+  .addNode("router", routerNode)
+  .addNode("planner", plannerNode)
+  .addNode("code_struct", codeStructNode)
+  .addNode("multi_file_codegen", multiFileCodegenNode)
+  .addNode("merge", mergeNode)
+  .addNode("qa_reviewer", qaReviewerNode)
+  .addNode("modifier", modifierNode)
+  .addNode("chat_agent", chatAgentNode)
+  .addNode("single_code", singleCodeNode)
+  .addNode("mode_upgrade", modeUpgradeNode)
 
-export const agentGraph = builder.compile();
+  // Entry point: mode-based routing
+  .addConditionalEdges(START, (state) => {
+    // Mode upgrade: engineer → team, run planner + QA on existing code
+    if (state.userInput === "__MODE_UPGRADE__") return "mode_upgrade";
+    if (state.mode === "engineer") return "single_code";
+    return "router";
+  }, {
+    "mode_upgrade": "mode_upgrade",
+    "single_code": "single_code",
+    "router": "router",
+  })
+
+  // Router → 3 paths
+  .addConditionalEdges("router", (state) => state.route, {
+    "new_request": "planner",
+    "modify": "modifier",
+    "question": "chat_agent",
+  })
+
+  // Planner → code generation or need_input
+  .addConditionalEdges("planner", (state) => {
+    if (state.route === "need_input") return "end";
+    if (state.projectType === "fullstack") return "multi_file_codegen";
+    return "code_struct";
+  }, {
+    "code_struct": "code_struct",
+    "multi_file_codegen": "multi_file_codegen",
+    "end": END,
+  })
+
+  // Code struct → merge → QA
+  .addEdge("code_struct", "merge")
+  .addEdge("multi_file_codegen", "merge")
+  .addEdge("merge", "qa_reviewer")
+
+  // QA reviewer → pass or retry
+  .addConditionalEdges("qa_reviewer", (state) => {
+    if (state.reviewResult === "pass") return "end";
+    if (state.retryCount >= 2) return "end"; // max 3 attempts
+    return state.route === "modify" ? "modifier" : "code_struct";
+  }, {
+    "end": END,
+    "modifier": "modifier",
+    "code_struct": "code_struct",
+  })
+
+  // Modifier → QA
+  .addEdge("modifier", "qa_reviewer")
+
+  // Chat agent → end
+  .addEdge("chat_agent", END)
+
+  // Single code → end (engineer mode, fast path)
+  .addEdge("single_code", END)
+
+  // Mode upgrade → end (outputs planner + QA results as messages)
+  .addEdge("mode_upgrade", END);
+
+import { isKVAvailable } from './kv-storage';
+
+function createCheckpointer() {
+  if (isKVAvailable()) {
+    try {
+      const { createKVCheckpointer } = require('./kv-checkpointer');
+      return createKVCheckpointer();
+    } catch {
+      // KV checkpointer failed, fallback to memory
+    }
+  }
+  return new MemorySaver();
+}
+
+const checkpointer = createCheckpointer();
+export const agentGraph = builder.compile({ checkpointer });
 export { PipelineState };

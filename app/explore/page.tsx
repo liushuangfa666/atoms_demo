@@ -2,22 +2,20 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import TemplateCard from '@/components/TemplateCard';
-import { templates, categories } from '@/lib/templates';
-import { createProject } from '@/lib/storage';
-import { Template } from '@/lib/types';
+import ShowcaseCard from '@/components/TemplateCard';
+import { showcases, categories } from '@/lib/showcases';
+import { ShowcaseProject } from '@/lib/types';
 
 export default function ExplorePage() {
   const router = useRouter();
   const [activeCategory, setActiveCategory] = useState('全部');
 
   const filtered = activeCategory === '全部'
-    ? templates
-    : templates.filter(t => t.category === activeCategory);
+    ? showcases
+    : showcases.filter(s => s.category === activeCategory);
 
-  const handleRemix = (template: Template) => {
-    const project = createProject(template.name);
-    router.push(`/project/${project.id}?prompt=${encodeURIComponent(template.prompt)}`);
+  const handleCardClick = (showcase: ShowcaseProject) => {
+    router.push(`/showcase/${showcase.id}`);
   };
 
   return (
@@ -41,10 +39,10 @@ export default function ExplorePage() {
         ))}
       </div>
 
-      {/* Template Grid */}
+      {/* Showcase Grid */}
       <div className="grid grid-cols-3 gap-4">
-        {filtered.map(template => (
-          <TemplateCard key={template.id} template={template} onRemix={handleRemix} />
+        {filtered.map(showcase => (
+          <ShowcaseCard key={showcase.id} showcase={showcase} onClick={handleCardClick} />
         ))}
       </div>
     </div>
