@@ -43,15 +43,17 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
         // (no handler needed — esbuild default resolver handles them)
 
         // Load virtual files
+        // resolveDir must point to a directory with node_modules so esbuild can resolve bare imports (react, etc.)
+        const resolveDir = process.cwd();
         build.onLoad({ filter: /.*/, namespace: VIRTUAL_NS }, (args) => {
           if (args.path === VIRTUAL_ENTRY) {
-            return { contents: entryContent, loader: 'jsx', resolveDir: '/' };
+            return { contents: entryContent, loader: 'jsx', resolveDir };
           }
           const content = fileMap.get(args.path);
           if (content !== undefined) {
             const ext = args.path.split('.').pop() || '';
             const loader: esbuild.Loader = ['jsx', 'tsx'].includes(ext) ? 'jsx' : 'js';
-            return { contents: content, loader, resolveDir: '/' };
+            return { contents: content, loader, resolveDir };
           }
           return null;
         });
