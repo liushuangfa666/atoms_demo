@@ -73,29 +73,39 @@ function localSaveAll(projects: Project[]): void {
 // ─── Public API (all async) ───
 
 export async function getProjects(): Promise<Project[]> {
-  const useApi = await checkApi();
-  if (useApi) {
-    try {
-      // The list endpoint only returns metadata; fetch full projects
-      const res = await fetch('/api/projects');
-      if (res.ok) {
-        const metaList = await res.json();
-        // Fetch full project data for each
-        const projects: Project[] = [];
-        for (const meta of metaList) {
-          const detailRes = await fetch(`/api/projects/${meta.id}`);
-          if (detailRes.ok) {
-            const project = await detailRes.json();
-            projects.push(migrateProject(project));
-          }
-        }
-        // Cache to localStorage
-        localSaveAll(projects);
-        return projects;
-      }
-    } catch {
+  // Try summary API first (single request, no N+1)
+  try {
+    const res = await fetch('/api/projects?mode=summary', {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      apiAvailable = true;
+      const summaries = await res.json();
+      // Convert summaries to Project-compatible objects (no full messages/files)
+      const projects: Project[] = summaries.map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        mode: s.mode,
+        messages: Array.from({ length: s.messageCount || 0 }, (_, i) => ({
+          id: `placeholder-${i}`,
+          role: 'user' as const,
+          content: '',
+          timestamp: '',
+        })),
+        currentCode: s.currentCode || '',
+        files: [],
+        projectType: s.projectType || 'single-html',
+        userId: '',
+      }));
+      return projects;
+    }
+    if (res.status === 503) {
       apiAvailable = false;
     }
+  } catch {
+    apiAvailable = false;
   }
   return localGetAll();
 }

@@ -77,10 +77,28 @@ export const SYSTEM_PROMPTS = {
 你的职责：
 1. 将用户需求转化为产品规划
 2. 列出功能模块和交互流程
-3. 只在需求极度模糊时（比如只有"做一个应用"两三个字）才请求补充
+3. 将项目拆分为可独立生成的代码模块（用于分批代码生成）
+4. 只在需求极度模糊时（比如只有"做一个应用"两三个字）才请求补充
 
 回复格式（JSON）：
-{"need_clarification": false, "plan": "功能模块和交互流程的描述"}
+{
+  "need_clarification": false,
+  "plan": "功能模块和交互流程的描述",
+  "modules": [
+    {"name": "模块名", "files": ["src/App.jsx"], "description": "模块功能和包含的内容"},
+    {"name": "组件模块", "files": ["src/components/Header.jsx", "src/components/Sidebar.jsx"], "description": "组件功能描述"},
+    {"name": "数据层", "files": ["src/data/mockData.js"], "description": "模拟数据和工具函数"}
+  ]
+}
+
+modules 规则：
+- 按依赖顺序排列（被依赖的模块在前）
+- 每个模块包含 1-3 个文件
+- 总共 3-6 个模块
+- 第一个模块必须包含 src/App.jsx（主布局和路由）
+- 复杂组件（如看板、图表、弹窗）单独一个模块
+- 简单项目（<3个组件）可以只放2个模块
+- files 路径使用 src/components/ 目录结构
 
 只有当需求完全无法理解时才回复：
 {"need_clarification": true, "question": "向用户提出的问题，简洁具体，最多1-2个问题"}

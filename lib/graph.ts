@@ -25,6 +25,10 @@ const PipelineState = Annotation.Root({
   qaResults: Annotation<QAResult[]>,
   contextSummary: Annotation<string>,
   apiEndpoints: Annotation<{ method: string; path: string; description: string }[]>,
+  // Iterative codegen fields
+  generationModules: Annotation<Array<{ name: string; files: string[]; description: string }>>,
+  generatedFiles: Annotation<ProjectFile[]>,
+  currentModuleIndex: Annotation<number>,
 });
 
 // ── LLM helpers ────────────────────────────────────────
@@ -117,6 +121,9 @@ async function plannerNode(state: typeof PipelineState.State) {
       plan: parsed.plan,
       chatResponse: "",
       apiEndpoints: parsed.apiEndpoints || [],
+      generationModules: parsed.modules || [],
+      generatedFiles: [],
+      currentModuleIndex: 0,
     };
   } catch {
     return { plan: text, chatResponse: "" };
@@ -216,6 +223,128 @@ async function multiFileCodegenNode(state: typeof PipelineState.State) {
   }));
 
   return { files, projectType: 'react-vite' };
+}
+
+// ── Helper: extract export names from code for context summaries ──
+
+function extractExports(code: string): string {
+  if (!code) return '(none)';
+  const matches = code.match(/export\s+(?:default\s+)?(?:function|const|class|var|let)\s+(\w+)/g);
+  if (!matches) return '(auto)';
+  return matches.map(m => { const n = m.match(/(\w+)$/); return n ? n[1] : ''; }).filter(Boolean).join(', ');
+}
+
+// ── Node: Batch Codegen (iterative multi-file generation) ────
+
+const LANG_MAP: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+  html: 'html', css: 'css', json: 'json', md: 'markdown',
+};
+
+async function batchCodegenNode(state: typeof PipelineState.State) {
+  const modules = state.generationModules || [];
+  const currentIndex = state.currentModuleIndex || 0;
+  const alreadyGenerated = state.generatedFiles || [];
+
+  // Fallback to single-shot if no modules
+  if (modules.length === 0) {
+    return multiFileCodegenNode(state);
+  }
+
+  // Determine batch: 2 modules per batch (~8000 tokens per call)
+  const BATCH_SIZE = 2;
+  const batchEnd = Math.min(currentIndex + BATCH_SIZE, modules.length);
+  const batchModules = modules.slice(currentIndex, batchEnd);
+
+  // Build context of already-generated files (signatures only)
+  const generatedSummary = alreadyGenerated.length > 0
+    ? `\n\n已生成的文件（供你参考以确保 import 路径正确）：\n${
+        alreadyGenerated.map(f => `- ${f.path} (${f.content.length} chars, exports: ${extractExports(f.content)})`).join('\n')
+      }`
+    : '';
+
+  const upcomingSummary = batchEnd < modules.length
+    ? `\n\n后续还需要生成以下模块（本次不需要生成）：\n${
+        modules.slice(batchEnd).map(m => `- ${m.name}: ${m.files.join(', ')}`).join('\n')
+      }`
+    : '';
+
+  const qaFeedback = state.retryCount > 0 && state.qaResults?.length > 0
+    ? '\n\n⚠️ QA 审查发现以下问题，请务必修复：\n' +
+      state.qaResults.filter(r => r.severity === 'error')
+        .map(r => `- [${r.category}] ${r.message}${r.suggestion ? `（建议：${r.suggestion}）` : ''}`).join('\n')
+    : '';
+
+  const isFullstack = state.projectType === 'fullstack';
+  const prompt = isFullstack ? SYSTEM_PROMPTS.multiFileCodegenFullstack : SYSTEM_PROMPTS.multiFileCodegen;
+  const batchPrompt = `${prompt}
+
+重要：本次你只需要生成以下文件（共 ${batchModules.flatMap(m => m.files).length} 个）：
+${batchModules.map(m => `模块「${m.name}」(${m.description}): ${m.files.join(', ')}`).join('\n')}
+
+只输出这些文件的 JSON 对象，不要生成其他文件。`;
+
+  const llm = createLLM(8192, "MiniMax-M2.7-highspeed", 120_000);
+
+  const response = await llm.invoke([
+    new SystemMessage(batchPrompt),
+    new HumanMessage(
+      `产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${generatedSummary}${upcomingSummary}${qaFeedback}`
+    ),
+  ]);
+
+  let text = (response.content as string).trim();
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+
+  const parseFn = isFullstack ? parseFullstackFileMap : parseFileMap;
+  const newFilesMap = parseFn(text);
+
+  const newFiles: ProjectFile[] = Object.entries(newFilesMap).map(([path, content]) => ({
+    path,
+    content: String(content),
+    language: LANG_MAP[path.split('.').pop() || ''] || 'text',
+  }));
+
+  // Merge with already-generated files
+  const allGenerated = [...alreadyGenerated];
+  for (const nf of newFiles) {
+    const existingIdx = allGenerated.findIndex(f => f.path === nf.path);
+    if (existingIdx >= 0) {
+      allGenerated[existingIdx] = nf;
+    } else {
+      allGenerated.push(nf);
+    }
+  }
+
+  const isLastBatch = batchEnd >= modules.length;
+
+  // If last batch, merge with base files
+  if (isLastBatch) {
+    if (isFullstack) {
+      const baseFiles = getFullstackBaseFiles(3100, 3200);
+      for (const [path, content] of Object.entries(baseFiles)) {
+        if (!allGenerated.some(f => f.path === path)) {
+          allGenerated.push({ path, content, language: LANG_MAP[path.split('.').pop() || ''] || 'text' });
+        }
+      }
+      return { files: allGenerated, projectType: 'fullstack' as const, generatedFiles: allGenerated };
+    }
+
+    const baseFiles = getBaseFiles();
+    for (const [path, content] of Object.entries(baseFiles)) {
+      if (!allGenerated.some(f => f.path === path)) {
+        allGenerated.push({ path, content, language: LANG_MAP[path.split('.').pop() || ''] || 'text' });
+      }
+    }
+    return { files: allGenerated, projectType: 'react-vite' as const, generatedFiles: allGenerated };
+  }
+
+  // More batches to go — return partial state
+  return {
+    generatedFiles: allGenerated,
+    currentModuleIndex: batchEnd,
+  };
 }
 
 // ── Code cleanup (kept for legacy compatibility) ────────
@@ -569,6 +698,7 @@ const builder = new StateGraph(PipelineState)
   .addNode("planner", plannerNode)
   .addNode("code_struct", codeStructNode)
   .addNode("multi_file_codegen", multiFileCodegenNode)
+  .addNode("batch_codegen", batchCodegenNode)
   .addNode("merge", mergeNode)
   .addNode("qa_reviewer", qaReviewerNode)
   .addNode("modifier", modifierNode)
@@ -599,27 +729,45 @@ const builder = new StateGraph(PipelineState)
   .addConditionalEdges("planner", (state) => {
     if (state.route === "need_input") return "end";
     if (state.projectType === "fullstack") return "multi_file_codegen";
+    // Use batch codegen when planner produced multiple modules
+    if (state.generationModules && state.generationModules.length > 1) return "batch_codegen";
     return "code_struct";
   }, {
     "code_struct": "code_struct",
     "multi_file_codegen": "multi_file_codegen",
+    "batch_codegen": "batch_codegen",
     "end": END,
   })
 
   // Code struct → merge → QA
   .addEdge("code_struct", "merge")
   .addEdge("multi_file_codegen", "merge")
+  // batch_codegen loops until all modules done
+  .addConditionalEdges("batch_codegen", (state) => {
+    const modules = state.generationModules || [];
+    const currentIndex = state.currentModuleIndex || 0;
+    if (currentIndex < modules.length) {
+      return "batch_codegen"; // more batches needed
+    }
+    return "merge"; // all done
+  }, {
+    "batch_codegen": "batch_codegen",
+    "merge": "merge",
+  })
   .addEdge("merge", "qa_reviewer")
 
   // QA reviewer → pass or retry
   .addConditionalEdges("qa_reviewer", (state) => {
     if (state.reviewResult === "pass") return "end";
     if (state.retryCount >= 2) return "end"; // max 3 attempts
-    return state.route === "modify" ? "modifier" : "code_struct";
+    if (state.route === "modify") return "modifier";
+    if (state.generationModules && state.generationModules.length > 1) return "batch_codegen";
+    return "code_struct";
   }, {
     "end": END,
     "modifier": "modifier",
     "code_struct": "code_struct",
+    "batch_codegen": "batch_codegen",
   })
 
   // Modifier → QA

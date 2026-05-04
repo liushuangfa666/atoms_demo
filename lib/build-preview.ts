@@ -3,6 +3,23 @@ import { ProjectFile } from './types';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
+// Structured result types for preview build diagnostics
+export interface BuildError {
+  file: string;
+  line?: number;
+  column?: number;
+  message: string;
+}
+
+export interface BuildWarning {
+  file: string;
+  message: string;
+}
+
+export type BuildPreviewResult =
+  | { ok: true; html: string }
+  | { ok: false; error: string; errors: BuildError[]; warnings: BuildWarning[] };
+
 const VIRTUAL_ENTRY = 'virtual-entry.jsx';
 const VIRTUAL_NS = 'virtual';
 
@@ -27,7 +44,10 @@ const STUBBED_LIBS: Record<string, string> = {
  * Missing deps are stubbed out so the preview doesn't crash.
  * Tailwind classes are handled at runtime via /tailwind.js.
  */
-export async function buildPreviewHtml(files: ProjectFile[]): Promise<string | null> {
+export async function buildPreviewHtml(files: ProjectFile[]): Promise<BuildPreviewResult> {
+  const buildErrors: BuildError[] = [];
+  const buildWarnings: BuildWarning[] = [];
+
   try {
     const fileMap = new Map(files.map(f => [f.path, f.content]));
     const resolveDir = process.cwd();
@@ -37,7 +57,14 @@ export async function buildPreviewHtml(files: ProjectFile[]): Promise<string | n
       f.path === 'src/App.jsx' || f.path === 'src/App.tsx' ||
       f.path === 'frontend/src/App.jsx' || f.path === 'frontend/src/App.tsx'
     )?.path;
-    if (!appPath) return null;
+    if (!appPath) {
+      return {
+        ok: false,
+        error: `No App entry point found. Available files: ${files.map(f => f.path).join(', ')}`,
+        errors: [{ file: 'unknown', message: `No App.jsx/App.tsx found in files: ${files.slice(0, 10).map(f => f.path).join(', ')}` }],
+        warnings: [],
+      };
+    }
 
     // For fullstack projects, only use frontend/ files for preview
     const isFrontend = appPath.startsWith('frontend/');
@@ -129,23 +156,51 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
       },
     };
 
+    // Error-collecting plugin for diagnostics
+    const errorCollector: esbuild.Plugin = {
+      name: 'error-collector',
+      setup(build) {
+        build.onEnd((result) => {
+          for (const e of result.errors) {
+            buildErrors.push({
+              file: e.location?.file || 'unknown',
+              line: e.location?.line,
+              column: e.location?.column,
+              message: e.text,
+            });
+          }
+          for (const w of result.warnings) {
+            buildWarnings.push({
+              file: w.location?.file || 'unknown',
+              message: w.text,
+            });
+          }
+        });
+      },
+    };
+
     const result = await esbuild.build({
       entryPoints: [VIRTUAL_ENTRY],
       bundle: true,
       write: false,
       format: 'iife',
-      plugins: [stripBadImports, virtualFs],
+      plugins: [stripBadImports, virtualFs, errorCollector],
       jsx: 'automatic',
       target: ['es2020'],
       minify: true,
       treeShaking: true,
-      logLevel: 'silent',
+      logLevel: 'warning',
     });
 
     const jsCode = result.outputFiles?.[0]?.text;
-    if (!jsCode) return null;
+    if (!jsCode) {
+      if (buildErrors.length > 0) {
+        return { ok: false, error: buildErrors[0].message, errors: buildErrors, warnings: buildWarnings };
+      }
+      return { ok: false, error: 'esbuild produced no output', errors: [], warnings: buildWarnings };
+    }
 
-    return `<!DOCTYPE html>
+    const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -159,10 +214,35 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
 <script>${jsCode}<\/script>
 </body>
 </html>`;
+    return { ok: true, html };
   } catch (err: any) {
+    // Extract esbuild structured errors from thrown exception
+    const esbuildErrors = err?.errors || [];
+    for (const e of esbuildErrors) {
+      buildErrors.push({
+        file: e.location?.file || 'unknown',
+        line: e.location?.line,
+        column: e.location?.column,
+        message: e.text,
+      });
+    }
+    const esbuildWarnings = err?.warnings || [];
+    for (const w of esbuildWarnings) {
+      buildWarnings.push({
+        file: w.location?.file || 'unknown',
+        message: w.text,
+      });
+    }
+
     console.error('[build-preview] Failed:', err?.message || String(err));
-    if (err?.errors) console.error('[build-preview] Errors:', JSON.stringify(err.errors));
-    return null;
+    if (buildErrors.length > 0) console.error('[build-preview] Errors:', JSON.stringify(buildErrors));
+
+    return {
+      ok: false,
+      error: err?.message || String(err),
+      errors: buildErrors.length > 0 ? buildErrors : [{ file: 'unknown', message: err?.message || String(err) }],
+      warnings: buildWarnings,
+    };
   }
 }
 

@@ -5,33 +5,26 @@ import { useRouter } from 'next/navigation';
 import { getProjects, deleteProject } from '@/lib/storage';
 import { Project } from '@/lib/types';
 
-function ProjectThumbnail({ code }: { code: string }) {
-  if (!code) {
-    return (
-      <div className="w-full h-full bg-gradient-to-br from-primary/20 to-purple-500/20 flex items-center justify-center">
-        <span className="text-2xl">📝</span>
-      </div>
-    );
-  }
+function ProjectThumbnail({ projectType, messageCount }: { projectType: string; messageCount: number }) {
+  const gradients: Record<string, string> = {
+    'react-vite': 'from-blue-500/20 to-cyan-500/20',
+    'fullstack': 'from-purple-500/20 to-pink-500/20',
+    'single-html': 'from-amber-500/20 to-orange-500/20',
+  };
+  const icons: Record<string, string> = {
+    'react-vite': '⚛️',
+    'fullstack': '🔧',
+    'single-html': '📝',
+  };
+  const gradient = gradients[projectType] || gradients['single-html'];
+  const icon = icons[projectType] || icons['single-html'];
 
   return (
-    <div className="w-full h-full overflow-hidden relative bg-white">
-      <div
-        className="origin-top-left"
-        style={{
-          width: '800px',
-          height: '500px',
-          transform: 'scale(0.2)',
-          transformOrigin: 'top left',
-        }}
-      >
-        <iframe
-          sandbox="allow-scripts"
-          srcDoc={code}
-          className="w-full h-full border-none"
-          title="Preview"
-        />
-      </div>
+    <div className={`w-full h-full bg-gradient-to-br ${gradient} flex flex-col items-center justify-center gap-2`}>
+      <span className="text-3xl opacity-70">{icon}</span>
+      {messageCount > 0 && (
+        <span className="text-[10px] text-text-tertiary">{messageCount} 条消息</span>
+      )}
     </div>
   );
 }
@@ -85,7 +78,7 @@ export default function ProjectsPage() {
               className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 cursor-pointer transition-colors group relative"
             >
               <div className="h-28 rounded-lg mb-3 overflow-hidden">
-                <ProjectThumbnail code={project.currentCode} />
+                <ProjectThumbnail projectType={project.projectType || 'single-html'} messageCount={project.messages.length} />
               </div>
               <p className="text-sm font-medium text-white truncate">{project.name}</p>
               <div className="flex justify-between items-center mt-1">

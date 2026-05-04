@@ -43,18 +43,23 @@ export async function POST(
     return NextResponse.json({ cached: true, size: project.previewHtml.length, html: project.previewHtml });
   }
 
-  const html = await buildPreviewHtml(project.files);
-  if (!html) {
-    return NextResponse.json({ error: 'Build failed' }, { status: 500 });
+  const result = await buildPreviewHtml(project.files);
+  if (!result.ok) {
+    return NextResponse.json({
+      error: 'Build failed',
+      buildError: result.error,
+      errors: result.errors,
+      warnings: result.warnings,
+    }, { status: 500 });
   }
 
   // Cache in KV if available
   if (isKVAvailable()) {
     try {
       const userId = getUserId(request);
-      await updateProject(id, { previewHtml: html }, userId);
+      await updateProject(id, { previewHtml: result.html }, userId);
     } catch { /* cache failure is ok */ }
   }
 
-  return NextResponse.json({ cached: false, size: html.length, html });
+  return NextResponse.json({ cached: false, size: result.html.length, html: result.html });
 }

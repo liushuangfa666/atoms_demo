@@ -313,6 +313,26 @@ export default function ProjectEditor() {
               saveMessages([...newMessages], currentCode, currentFiles);
             }
 
+            if (data.type === 'batch_progress') {
+              const { moduleIndex, totalModules, files: batchFiles, summary } = data;
+              termLog(`\x1b[36m[Batch] ${summary || `批次 ${moduleIndex}/${totalModules}: ${batchFiles?.length || 0} 个文件`}\x1b[0m`);
+              if (batchFiles && batchFiles.length > 0) {
+                // Accumulate partial files into currentFiles for progressive display
+                currentFiles = [...currentFiles, ...batchFiles];
+                setFiles([...currentFiles]);
+              }
+            }
+
+            if (data.type === 'build_error') {
+              const { error, errors, summary } = data;
+              termLog(`\x1b[31m[Build Error] ${summary || error}\x1b[0m`);
+              if (errors && errors.length > 0) {
+                for (const e of errors) {
+                  termLog(`\x1b[31m  ${e.file}${e.line ? `:${e.line}` : ''}: ${e.message}\x1b[0m`);
+                }
+              }
+            }
+
             if (data.type === 'error') {
               const errorMsg: Message = {
                 id: `error-${Date.now()}`,

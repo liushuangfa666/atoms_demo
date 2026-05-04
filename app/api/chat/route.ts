@@ -34,11 +34,24 @@ export async function POST(request: NextRequest) {
     return detected;
   }
 
-  /** Build preview HTML and cache it in the background (fire-and-forget) */
+  /** Build preview HTML and cache it in the background; send diagnostics on failure */
   function cachePreview(projectId: string, files: ProjectFile[]) {
-    buildPreviewHtml(files).then(html => {
-      if (html && isKVAvailable()) {
-        return updateProject(projectId, { previewHtml: html }, userId);
+    buildPreviewHtml(files).then(result => {
+      if (result.ok && isKVAvailable()) {
+        return updateProject(projectId, { previewHtml: result.html }, userId);
+      }
+      if (!result.ok) {
+        // Send build error diagnostics to frontend
+        const errorSummary = result.errors.length > 0
+          ? result.errors.map(e => `${e.file}${e.line ? `:${e.line}` : ''}: ${e.message}`).join('\n')
+          : result.error;
+        writer.write(encoder.encode(sseMessage({
+          type: 'build_error',
+          error: result.error,
+          errors: result.errors,
+          warnings: result.warnings,
+          summary: `⚠️ Preview build failed:\n${errorSummary}`,
+        }))).catch(() => {});
       }
     }).catch(() => { /* ignore build failures */ });
   }  if (!message) {
@@ -175,6 +188,7 @@ export async function POST(request: NextRequest) {
         'chat_agent': '💬 思考回答...',
         'single_code': '💻 生成代码中...',
         'mode_upgrade': '🔄 切换到团队模式，运行规划师和QA审查...',
+        'batch_codegen': '💻 分批生成代码...',
       };
 
       // Heartbeat to keep connection alive during long LLM calls
@@ -277,6 +291,40 @@ export async function POST(request: NextRequest) {
                   await writer.write(encoder.encode(sseMessage({
                     type: 'code_generated',
                     code: output.htmlCode,
+                  })));
+                }
+              }
+
+              if (nodeName === 'batch_codegen') {
+                const newFiles = output.generatedFiles || [];
+                const moduleIndex = output.currentModuleIndex || 0;
+                const totalModules = (stateSnapshot?.values?.generationModules || []).length || 0;
+
+                if (output.files && output.files.length > 0) {
+                  // Final batch: all files complete
+                  const detectedType = await persistProjectType(threadId, output.files);
+                  cachePreview(threadId, output.files);
+                  await writer.write(encoder.encode(sseMessage({
+                    type: 'files_generated',
+                    files: output.files,
+                    projectType: detectedType,
+                  })));
+                  await writer.write(encoder.encode(sseMessage({
+                    type: 'agent_done',
+                    agent: 'alex',
+                    fullText: `分批代码生成完成，共 ${output.files.length} 个文件`,
+                    toolCall: true,
+                    toolName: 'batch_codegen',
+                    summary: `💻 生成了 ${output.files.length} 个文件`,
+                  })));
+                } else if (newFiles.length > 0) {
+                  // Intermediate batch
+                  await writer.write(encoder.encode(sseMessage({
+                    type: 'batch_progress',
+                    files: newFiles,
+                    moduleIndex,
+                    totalModules,
+                    summary: `💻 正在生成文件 (${moduleIndex}/${totalModules}): ${newFiles.slice(-3).map((f: any) => f.path).join(', ')}`,
                   })));
                 }
               }
