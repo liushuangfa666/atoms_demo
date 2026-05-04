@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 
 interface Props {
-  mode: 'legacy' | 'webcontainer';
+  mode: 'legacy' | 'webcontainer' | 'server';
   code?: string;
   previewUrl?: string | null;
   isLoading?: boolean;
@@ -66,6 +66,13 @@ export default function PreviewPanel({ mode, code, previewUrl, isLoading }: Prop
             <p className="text-sm text-[#94a3b8]">安装依赖中...</p>
           </div>
         </div>
+      ) : mode === 'server' && previewUrl ? (
+        <iframe
+          src={previewUrl}
+          className="flex-1 w-full border-none"
+          title="Preview"
+          sandbox="allow-scripts allow-same-origin allow-forms"
+        />
       ) : mode === 'webcontainer' && previewUrl ? (
         <iframe
           src={previewUrl}

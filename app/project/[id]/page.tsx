@@ -13,6 +13,7 @@ import DownloadButton from '@/components/DownloadButton';
 import { getProject, updateProject } from '@/lib/storage';
 import { Message, Project, Agent, ProjectFile } from '@/lib/types';
 import { useWebContainer } from '@/hooks/useWebContainer';
+import { useProjectRunner } from '@/hooks/useProjectRunner';
 
 const TerminalPanel = dynamic(() => import('@/components/TerminalPanel'), { ssr: false });
 
@@ -41,8 +42,10 @@ export default function ProjectEditor() {
 
   // WebContainer integration
   const wc = useWebContainer(projectId);
+  const runner = useProjectRunner(projectId);
   const [reactProjectType, setReactProjectType] = useState(false);
   const isReactProject = project?.projectType === 'react-vite' || reactProjectType;
+  const isFullstack = project?.projectType === 'fullstack';
   const [hasCachedPreview, setHasCachedPreview] = useState(false);
   const [buildingPreview, setBuildingPreview] = useState(false);
 
@@ -225,10 +228,13 @@ export default function ProjectEditor() {
             if (data.type === 'files_generated') {
               currentFiles = data.files;
               setFiles(data.files);
-              setHasCachedPreview(false); // Switch to WebContainer for live preview
+              setHasCachedPreview(false); // Switch to live preview
               if (data.projectType === 'react-vite') {
                 setReactProjectType(true);
                 updateProject(projectId, { projectType: 'react-vite' });
+              }
+              if (data.projectType === 'fullstack') {
+                updateProject(projectId, { projectType: 'fullstack' });
               }
               termLog(`\x1b[36m文件生成: ${data.files.length} 个文件\x1b[0m`);
 
@@ -240,6 +246,14 @@ export default function ProjectEditor() {
                 });
               }
 
+              // If fullstack project, start server-side runner
+              if (data.projectType === 'fullstack') {
+                termLog(`\x1b[36m[Runner] 启动全栈项目...\x1b[0m`);
+                runner.start(data.files).catch((e: unknown) => {
+                  termLog(`\x1b[31m[Runner] 错误: ${e instanceof Error ? e.message : String(e)}\x1b[0m`);
+                });
+              }
+
               // Also update code for legacy compat
               const htmlFile = data.files.find((f: ProjectFile) => f.path === 'index.html');
               if (htmlFile) {
@@ -247,6 +261,10 @@ export default function ProjectEditor() {
                 setCode(htmlFile.content);
               }
               saveMessages([...newMessages], currentCode, data.files);
+            }
+
+            if (data.type === 'runner_started') {
+              termLog(`\x1b[32m[Runner] 项目已启动: 端口 ${data.port}\x1b[0m`);
             }
 
             if (data.type === 'qa_result') {
@@ -369,6 +387,16 @@ export default function ProjectEditor() {
     }
   }, [wc.ready, projectId, files.length, hasCachedPreview, buildingPreview]);
 
+  // Auto-start runner for fullstack projects
+  useEffect(() => {
+    if (!isFullstack || files.length === 0) return;
+    if (runner.status === 'idle' || runner.status === 'stopped') {
+      runner.start(files).catch(() => {});
+    } else if (runner.status !== 'installing' && runner.status !== 'running') {
+      runner.refreshStatus();
+    }
+  }, [isFullstack, files.length, runner.status]);
+
   // Auto-send template prompt
   useEffect(() => {
     if (initialPromptSent || messages.length > 0 || !project) return;
@@ -380,7 +408,9 @@ export default function ProjectEditor() {
   }, [project, initialPromptSent, messages.length, searchParams, handleSendMessage]);
 
   // Combine WebContainer terminal output with local terminal output
-  const combinedTerminalOutput = terminalOutput + (wc.terminalOutput ? `\x1b[36m[WebContainer]\x1b[0m\n${wc.terminalOutput}` : '');
+  const combinedTerminalOutput = terminalOutput
+    + (wc.terminalOutput ? `\x1b[36m[WebContainer]\x1b[0m\n${wc.terminalOutput}` : '')
+    + (runner.logs ? `\x1b[36m[Runner]\x1b[0m\n${runner.logs}` : '');
 
   if (!project) {
     return <div className="flex items-center justify-center h-full text-text-tertiary">项目不存在</div>;
@@ -417,13 +447,16 @@ export default function ProjectEditor() {
               团队
             </button>
             <span className="text-[10px] text-text-tertiary ml-1">
-              {isReactProject ? 'React + Vite' : project.projectType || 'HTML'}
+              {isFullstack ? 'Fullstack' : isReactProject ? 'React + Vite' : project.projectType || 'HTML'}
             </span>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {wc.ready && <span className="text-[10px] text-green-400">WebContainer 就绪</span>}
-          {wc.error && <span className="text-[10px] text-red-400">{wc.error}</span>}
+          {isFullstack && runner.status === 'running' && <span className="text-[10px] text-green-400">Runner :{runner.port}</span>}
+          {isFullstack && runner.status === 'installing' && <span className="text-[10px] text-amber-400">安装中...</span>}
+          {isFullstack && runner.error && <span className="text-[10px] text-red-400">{runner.error}</span>}
+          {!isFullstack && wc.ready && <span className="text-[10px] text-green-400">WebContainer 就绪</span>}
+          {!isFullstack && wc.error && <span className="text-[10px] text-red-400">{wc.error}</span>}
           <DownloadButton project={project} />
           <span className="text-xs text-text-tertiary">
             {new Date(project.updatedAt).toLocaleDateString('zh-CN')}
@@ -453,10 +486,17 @@ export default function ProjectEditor() {
           <div className="flex-1 overflow-hidden">
             {activeTab === 'preview' && (
               <PreviewPanel
-                mode={isReactProject && !(hasCachedPreview && !wc.previewUrl) ? 'webcontainer' : 'legacy'}
+                mode={
+                  isFullstack && runner.status === 'running' ? 'server'
+                  : isReactProject && wc.ready && !(hasCachedPreview && !wc.previewUrl) ? 'webcontainer'
+                  : 'legacy'
+                }
                 code={isReactProject && hasCachedPreview && !wc.previewUrl ? (project?.previewHtml || code) : code}
-                previewUrl={wc.previewUrl}
-                isLoading={wc.isInstalling}
+                previewUrl={
+                  isFullstack && runner.previewUrl ? runner.previewUrl
+                  : wc.previewUrl
+                }
+                isLoading={isFullstack ? runner.status === 'installing' : wc.isInstalling}
               />
             )}
             {activeTab === 'code' && (

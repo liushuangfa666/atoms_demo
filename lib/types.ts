@@ -7,6 +7,9 @@ export interface ProjectFile {
 /** Detect project type from file structure */
 export function detectProjectType(files: ProjectFile[]): Project['projectType'] {
   const paths = files.map(f => f.path);
+  if (paths.some(p => p.startsWith('backend/')) && paths.some(p => p.startsWith('frontend/'))) {
+    return 'fullstack';
+  }
   if (paths.includes('package.json') && paths.some(p => p.includes('vite.config'))) {
     return 'react-vite';
   }

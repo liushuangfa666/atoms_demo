@@ -46,6 +46,12 @@ export function useWebContainer(projectId?: string): UseWebContainerReturn {
   useEffect(() => {
     let cancelled = false;
 
+    // WebContainer requires cross-origin isolation (SharedArrayBuffer)
+    // In HTTP environments, skip booting entirely and fall back to legacy mode
+    if (typeof window !== 'undefined' && !window.crossOriginIsolated) {
+      return;
+    }
+
     // If already booted from a previous mount, just set ready
     if (isBooted()) {
       setReady(true);

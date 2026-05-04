@@ -5,6 +5,7 @@ import { SYSTEM_PROMPTS } from "./agents";
 import { ProjectFile, QAResult } from "./types";
 import { trimToolCallContent } from './context-manager';
 import { buildProjectFiles, parseFileMap, getBaseFiles } from './react-template';
+import { buildFullstackProjectFiles, parseFullstackFileMap, getFullstackBaseFiles } from './fullstack-template';
 
 // ── State ──────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ const PipelineState = Annotation.Root({
   projectType: Annotation<string>,
   qaResults: Annotation<QAResult[]>,
   contextSummary: Annotation<string>,
+  apiEndpoints: Annotation<{ method: string; path: string; description: string }[]>,
 });
 
 // ── LLM helpers ────────────────────────────────────────
@@ -94,8 +96,11 @@ async function routerNode(state: typeof PipelineState.State) {
 
 async function plannerNode(state: typeof PipelineState.State) {
   const llm = createLLM(4096);
+  const isFullstack = state.projectType === 'fullstack';
+  const prompt = isFullstack ? SYSTEM_PROMPTS.plannerFullstack : SYSTEM_PROMPTS.planner;
+
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPTS.planner),
+    new SystemMessage(prompt),
     new HumanMessage(`用户需求: ${state.userInput}\n\n请分析需求并输出 JSON。`),
   ]);
 
@@ -108,7 +113,11 @@ async function plannerNode(state: typeof PipelineState.State) {
     if (parsed.need_clarification) {
       return { plan: "", chatResponse: parsed.question, route: "need_input" };
     }
-    return { plan: parsed.plan, chatResponse: "" };
+    return {
+      plan: parsed.plan,
+      chatResponse: "",
+      apiEndpoints: parsed.apiEndpoints || [],
+    };
   } catch {
     return { plan: text, chatResponse: "" };
   }
@@ -150,6 +159,7 @@ async function codeStructNode(state: typeof PipelineState.State) {
 
 async function multiFileCodegenNode(state: typeof PipelineState.State) {
   const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+  const isFullstack = state.projectType === 'fullstack';
 
   let qaFeedback = '';
   if (state.retryCount > 0 && state.qaResults && state.qaResults.length > 0) {
@@ -159,24 +169,39 @@ async function multiFileCodegenNode(state: typeof PipelineState.State) {
     }
   }
 
+  const apiContext = state.apiEndpoints?.length
+    ? `\n\nAPI 接口定义:\n${state.apiEndpoints.map(e => `${e.method} ${e.path} — ${e.description}`).join('\n')}`
+    : '';
+
+  const prompt = isFullstack ? SYSTEM_PROMPTS.multiFileCodegenFullstack : SYSTEM_PROMPTS.multiFileCodegen;
+
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPTS.multiFileCodegen),
-    new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${qaFeedback}`),
+    new SystemMessage(prompt),
+    new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${apiContext}${qaFeedback}`),
   ]);
 
   let text = (response.content as string).trim();
   text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
   text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
 
+  // Fullstack project
+  if (isFullstack) {
+    const filesMap = parseFullstackFileMap(text);
+    // Allocate ports deterministically based on project hash (will be overridden by runner)
+    const port = 3100;
+    const backendPort = 3200;
+    const files = buildFullstackProjectFiles(filesMap, port, backendPort);
+    return { files, projectType: 'fullstack' };
+  }
+
+  // React project (original logic)
   const filesMap = parseFileMap(text);
 
   if (Object.keys(filesMap).length === 0) {
-    // Fallback: wrap as App.jsx
     const files = buildProjectFiles(text);
     return { files, projectType: 'react-vite' };
   }
 
-  // Merge with base template
   const baseFiles = getBaseFiles();
   const allFiles: Record<string, string> = { ...baseFiles, ...filesMap };
   const langMap: Record<string, string> = {
@@ -306,6 +331,7 @@ async function qaReviewerNode(state: typeof PipelineState.State) {
 async function modifierNode(state: typeof PipelineState.State) {
   const llm = fastLLM();
   const contextAddition = state.contextSummary ? `\n\n上下文摘要: ${state.contextSummary}` : '';
+  const isFullstack = state.projectType === 'fullstack';
 
   // Build current file context
   const currentFiles = state.files || [];
@@ -313,8 +339,10 @@ async function modifierNode(state: typeof PipelineState.State) {
     ? JSON.stringify(Object.fromEntries(currentFiles.map(f => [f.path, f.content])), null, 2)
     : '{}';
 
+  const prompt = isFullstack ? SYSTEM_PROMPTS.modifierFullstack : SYSTEM_PROMPTS.modifier;
+
   const response = await llm.invoke([
-    new SystemMessage(SYSTEM_PROMPTS.modifier),
+    new SystemMessage(prompt),
     new HumanMessage(
       `当前项目文件:\n\`\`\`json\n${filesJson}\n\`\`\`\n\n修改指令: ${state.userInput}${contextAddition}\n\n请输出修改后的文件（JSON 格式）。`
     ),
@@ -324,7 +352,8 @@ async function modifierNode(state: typeof PipelineState.State) {
   text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
   text = text.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
 
-  const changedFilesMap = parseFileMap(text);
+  const parseFn = isFullstack ? parseFullstackFileMap : parseFileMap;
+  const changedFilesMap = parseFn(text);
 
   // Merge changed files with existing files
   const updatedFiles = currentFiles.map(f => {
