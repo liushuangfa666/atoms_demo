@@ -360,15 +360,24 @@ export default function ProjectEditor() {
       // Auto-build preview if missing (React projects only)
       if (!p.previewHtml && p.files?.length > 0 && (p.projectType === 'react-vite' || p.files.some(f => f.path === 'vite.config.js'))) {
         setBuildingPreview(true);
-        fetch(`/api/projects/${p.id}/build-preview`, { method: 'POST' }).then(r => r.json()).then(result => {
+        fetch(`/api/projects/${p.id}/build-preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: p.files, projectType: p.projectType }),
+        }).then(r => r.json()).then(result => {
           if (!cancelled && result.size) {
             setHasCachedPreview(true);
-            // Reload project to get previewHtml
-            getProject(projectId).then(updated => {
-              if (updated && !cancelled) {
-                setProject(updated);
-              }
-            });
+            // Use returned HTML directly (works even without KV)
+            if (result.html) {
+              setProject(prev => prev ? { ...prev, previewHtml: result.html } : prev);
+            } else {
+              // Fallback: reload project from storage
+              getProject(projectId).then(updated => {
+                if (updated && !cancelled) {
+                  setProject(updated);
+                }
+              });
+            }
           }
           if (!cancelled) setBuildingPreview(false);
         }).catch(() => { if (!cancelled) setBuildingPreview(false); });
