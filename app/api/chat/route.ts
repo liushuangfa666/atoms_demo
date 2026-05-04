@@ -122,6 +122,16 @@ export async function POST(request: NextRequest) {
       if (hasCheckpoint && !inputState.contextSummary) {
         try {
           const totalTokens = estimateStateTokens(stateSnapshot.values);
+          const prev = stateSnapshot.values;
+          console.log(`[GraphState] Checkpoint loaded — thread: ${threadId}`);
+          console.log(`[GraphState]   messages: ${(prev.messages || []).length} items`);
+          console.log(`[GraphState]   files: ${(prev.files || []).length} files, total chars: ${(prev.files || []).reduce((s: number, f: any) => s + (f.content?.length || 0), 0)}`);
+          console.log(`[GraphState]   plan length: ${(prev.plan || '').length}`);
+          console.log(`[GraphState]   currentCode length: ${(prev.currentCode || '').length}`);
+          console.log(`[GraphState]   contextSummary: ${prev.contextSummary ? `${prev.contextSummary.length} chars` : '(none)'}`);
+          console.log(`[GraphState]   estimated tokens: ~${totalTokens.toLocaleString()} (threshold: ${COMPRESSION_THRESHOLD.toLocaleString()})`);
+          console.log(`[GraphState]   route: ${prev.route}, projectType: ${prev.projectType}, retryCount: ${prev.retryCount}`);
+
           if (totalTokens > COMPRESSION_THRESHOLD) {
             await writer.write(encoder.encode(sseMessage({
               type: 'progress',
@@ -131,13 +141,21 @@ export async function POST(request: NextRequest) {
             const compressed = await compressContextWithLLM(stateSnapshot.values);
             inputState.contextSummary = compressed;
 
+            console.log(`[GraphState] ✅ Context compressed: ~${totalTokens.toLocaleString()} → ~${estimateTokens(compressed).toLocaleString()} tokens`);
+
             await writer.write(encoder.encode(sseMessage({
               type: 'context_compressed',
               summary: `🗜️ 上下文已压缩：~${totalTokens.toLocaleString()} → ~${estimateTokens(compressed).toLocaleString()} tokens`,
               fullContent: compressed,
             })));
           }
-        } catch { /* compression failed, continue without it */ }
+        } catch (err) {
+          console.error('[GraphState] Compression failed:', err);
+        }
+      } else if (!hasCheckpoint) {
+        console.log(`[GraphState] New conversation — thread: ${threadId}, mode: ${mode}`);
+      } else {
+        console.log(`[GraphState] Resuming with existing contextSummary (${(inputState.contextSummary || '').length} chars)`);
       }
 
       // Use multi-mode streaming for token-level output
@@ -189,6 +207,16 @@ export async function POST(request: NextRequest) {
           if (streamMode === 'updates') {
             for (const [nodeName, nodeOutput] of Object.entries(data)) {
               const output = nodeOutput as Record<string, any>;
+
+              // Log node output state changes
+              const outKeys = Object.keys(output);
+              const stateSummary = outKeys.map(k => {
+                const v = output[k];
+                if (Array.isArray(v)) return `${k}: [${v.length} items]`;
+                if (typeof v === 'string') return `${k}: "${v.substring(0, 80)}${v.length > 80 ? '...' : ''}" (${v.length} chars)`;
+                return `${k}: ${JSON.stringify(v)?.substring(0, 100)}`;
+              }).join(', ');
+              console.log(`[GraphState] Node "${nodeName}" output → { ${stateSummary} }`);
 
               // Send progress event
               if (progressLabels[nodeName]) {
