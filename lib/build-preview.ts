@@ -1,20 +1,74 @@
 import * as esbuild from 'esbuild';
 import { ProjectFile } from './types';
+import { existsSync } from 'fs';
+import { join } from 'path';
 
 const VIRTUAL_ENTRY = 'virtual-entry.jsx';
 const VIRTUAL_NS = 'virtual';
 
+// Common libraries that the AI often uses — provide empty stubs if not installed locally.
+// This prevents build failures and lets the preview render (components may be missing but won't crash).
+const STUBBED_LIBS: Record<string, string> = {
+  'react-router-dom': `export function useNavigate(){return ()=>{}} export function useSearchParams(){return [{},()=>{}]} export function Link(props){return props.children||null} export function BrowserRouter(props){return props.children||null} export function Routes(props){return props.children||null} export function Route(props){return null} export function Navigate(){return null} export function useLocation(){return {pathname:'/'}} export function useParams(){return {}}`,
+  'react-router': `export function useNavigate(){return ()=>{}} export function useSearchParams(){return [{},()=>{}]} export function Link(props){return props.children||null} export function BrowserRouter(props){return props.children||null} export function Routes(props){return props.children||null} export function Route(props){return null}`,
+  'recharts': `export function PieChart(props){return props.children||null} export function Pie(props){return null} export function Cell(props){return null} export function ResponsiveContainer(props){return props.children||null} export function BarChart(props){return props.children||null} export function Bar(props){return null} export function XAxis(props){return null} export function YAxis(props){return null} export function Tooltip(props){return null} export function Legend(props){return null} export function CartesianGrid(props){return null} export function LineChart(props){return props.children||null} export function Line(props){return null} export function AreaChart(props){return props.children||null} export function Area(props){return null} export function RadarChart(props){return props.children||null} export function Radar(props){return null} export function PolarAngleAxis(props){return null} export function PolarRadiusAxis(props){return null}`,
+  'framer-motion': `export function motion(props){return props?.children||null} export function AnimatePresence(props){return props?.children||null} export function useAnimation(){return{start:()=>Promise.resolve()}}`,
+  'axios': `export default{get:()=>Promise.resolve({data:{}}),post:()=>Promise.resolve({data:{}})}`,
+  'zustand': `export function create(fn){return fn} export default function(fn){return fn}`,
+  'date-fns': `export function format(){return ''} export function parseISO(){return new Date()} export function differenceInSeconds(){return 0}`,
+  'react-countdown': `export default function Countdown(props){return props?.children||null}`,
+  'chart.js': `export default{} export function Chart(){}`,
+  'react-chartjs-2': `export function Doughnut(props){return null} export function Bar(props){return null} export function Line(props){return null} export function Pie(props){return null}`,
+};
+
 /**
  * Build a self-contained HTML preview from React project files using esbuild.
- * All deps (React, ReactDOM, lucide-react) are bundled inline.
+ * Installed deps (React, ReactDOM, lucide-react) are bundled inline.
+ * Missing deps are stubbed out so the preview doesn't crash.
  * Tailwind classes are handled at runtime via /tailwind.js.
  */
 export async function buildPreviewHtml(files: ProjectFile[]): Promise<string | null> {
   try {
     const fileMap = new Map(files.map(f => [f.path, f.content]));
+    const resolveDir = process.cwd();
 
     const appPath = files.find(f => f.path === 'src/App.jsx' || f.path === 'src/App.tsx')?.path;
     if (!appPath) return null;
+
+    // Strip imports of libraries that we stub — the AI code imports them but we replace with stubs
+    const stripBadImports: esbuild.Plugin = {
+      name: 'strip-bad-imports',
+      setup(build) {
+        // For bare imports that aren't in node_modules and aren't in our virtual FS,
+        // redirect to a stub module
+        build.onResolve({ filter: /^[a-z@]/ }, (args) => {
+          // Try to resolve from node_modules first
+          const modPath = args.path;
+          // Check if it exists in node_modules
+          const modDir = join(resolveDir, 'node_modules', modPath);
+          const modDirScoped = modPath.startsWith('@') ? join(resolveDir, 'node_modules', modPath.split('/').slice(0, 2).join('/')) : '';
+          if (existsSync(modDir) || (modDirScoped && existsSync(modDirScoped))) {
+            return undefined; // let esbuild handle it
+          }
+          // Check if we have a stub for it
+          if (STUBBED_LIBS[modPath]) {
+            return { path: `stub:${modPath}`, namespace: 'stub' };
+          }
+          // Try subpath matches (e.g., recharts/es6 or react-router-dom/dist)
+          const topLevel = modPath.split('/')[0];
+          if (STUBBED_LIBS[topLevel] && !STUBBED_LIBS[modPath]) {
+            return { path: `stub:${topLevel}`, namespace: 'stub' };
+          }
+          return undefined; // let esbuild try
+        });
+
+        build.onLoad({ filter: /.*/, namespace: 'stub' }, (args) => {
+          const modPath = args.path.replace('stub:', '');
+          const stub = STUBBED_LIBS[modPath] || STUBBED_LIBS[modPath.split('/')[0]] || '';
+          return { contents: stub, loader: 'js', resolveDir };
+        });
+      },
+    };
 
     // Synthesized entry — render App into #root
     const entryContent = `import React from 'react';
@@ -39,12 +93,7 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
           return null;
         });
 
-        // Bare imports (react, lucide-react, etc.) → let esbuild resolve from node_modules
-        // (no handler needed — esbuild default resolver handles them)
-
         // Load virtual files
-        // resolveDir must point to a directory with node_modules so esbuild can resolve bare imports (react, etc.)
-        const resolveDir = process.cwd();
         build.onLoad({ filter: /.*/, namespace: VIRTUAL_NS }, (args) => {
           if (args.path === VIRTUAL_ENTRY) {
             return { contents: entryContent, loader: 'jsx', resolveDir };
@@ -70,7 +119,7 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
       bundle: true,
       write: false,
       format: 'iife',
-      plugins: [virtualFs],
+      plugins: [stripBadImports, virtualFs],
       jsx: 'automatic',
       target: ['es2020'],
       minify: true,
@@ -85,7 +134,7 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content=device-width, initial-scale=1.0">
 <title>Preview</title>
 <script src="/tailwind.js"><\/script>
 <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}</style>
