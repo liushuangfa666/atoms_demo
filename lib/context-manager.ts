@@ -28,7 +28,7 @@ export function trimToolCallContent(content: string): string {
  */
 export function estimateStateTokens(state: Record<string, any>): number {
   let total = 0;
-  const textFields = ['plan', 'reviewResult', 'chatResponse', 'userInput', 'contextSummary'];
+  const textFields = ['plan', 'reviewResult', 'chatResponse', 'userInput', 'contextSummary', 'currentCode', 'htmlCode'];
   for (const f of textFields) {
     if (state[f]) total += estimateTokens(String(state[f]));
   }
@@ -36,6 +36,12 @@ export function estimateStateTokens(state: Record<string, any>): number {
     for (const m of state.messages) {
       const content = typeof m.content === 'string' ? m.content : '';
       total += estimateTokens(content);
+    }
+  }
+  if (state.files && Array.isArray(state.files)) {
+    for (const f of state.files) {
+      total += estimateTokens(f.content || '');
+      total += estimateTokens(f.path || '');
     }
   }
   return total;
@@ -53,6 +59,16 @@ function buildContextText(state: Record<string, any>): string {
       ? code.substring(0, 1000) + '\n...\n' + code.substring(code.length - 1000)
       : code;
     parts.push(`[当前代码] ${snippet}`);
+  }
+  if (state.files && state.files.length > 0) {
+    const fileSummaries = state.files.map((f: any) => {
+      const content = f.content || '';
+      const snippet = content.length > 500
+        ? content.substring(0, 250) + '\n...\n' + content.substring(content.length - 250)
+        : content;
+      return `[${f.path}] (${content.length} chars)\n${snippet}`;
+    });
+    parts.push(`[项目文件]\n${fileSummaries.join('\n\n')}`);
   }
   if (state.messages && state.messages.length > 0) {
     const recent = state.messages.slice(-10);
