@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProject, updateProject, deleteProject, isKVAvailable, getUserId } from '@/lib/kv-storage';
+import { getProjectRunner } from '@/lib/project-runner';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,5 +46,7 @@ export async function DELETE(
   const userId = getUserId(request);
   const { id } = await params;
   await deleteProject(id, userId);
+  // Stop runner and clean up project directory
+  try { await getProjectRunner().remove(id); } catch { /* ignore if not running */ }
   return NextResponse.json({ success: true });
 }
