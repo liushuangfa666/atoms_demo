@@ -229,6 +229,7 @@ export default function ProjectEditor() {
               currentFiles = data.files;
               setFiles(data.files);
               setHasCachedPreview(false); // Switch to live preview
+              setBuildingPreview(false);
               if (data.projectType === 'react-vite') {
                 setReactProjectType(true);
                 updateProject(projectId, { projectType: 'react-vite' });
@@ -251,6 +252,35 @@ export default function ProjectEditor() {
                 termLog(`\x1b[36m[Runner] 启动全栈项目...\x1b[0m`);
                 runner.start(data.files).catch((e: unknown) => {
                   termLog(`\x1b[31m[Runner] 错误: ${e instanceof Error ? e.message : String(e)}\x1b[0m`);
+                });
+              }
+
+              // Rebuild preview for React projects (esbuild bundling)
+              if (data.projectType === 'react-vite' || data.files.some((f: ProjectFile) => f.path === 'vite.config.js')) {
+                setBuildingPreview(true);
+                termLog(`\x1b[36m[Preview] 重新构建预览...\x1b[0m`);
+                fetch(`/api/projects/${projectId}/build-preview`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ files: data.files, projectType: data.projectType }),
+                }).then(r => r.json()).then(result => {
+                  if (result.size && result.html) {
+                    setHasCachedPreview(true);
+                    setProject(prev => prev ? { ...prev, previewHtml: result.html } : prev);
+                    termLog(`\x1b[32m[Preview] 预览构建完成: ${(result.size / 1024).toFixed(1)}KB\x1b[0m`);
+                  } else if (result.size) {
+                    setHasCachedPreview(true);
+                    getProject(projectId).then(updated => {
+                      if (updated) setProject(updated);
+                    });
+                    termLog(`\x1b[32m[Preview] 预览已缓存\x1b[0m`);
+                  } else {
+                    termLog(`\x1b[31m[Preview] 构建失败\x1b[0m`);
+                  }
+                  setBuildingPreview(false);
+                }).catch((e: Error) => {
+                  termLog(`\x1b[31m[Preview] 构建错误: ${e.message}\x1b[0m`);
+                  setBuildingPreview(false);
                 });
               }
 
