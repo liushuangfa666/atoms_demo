@@ -116,8 +116,10 @@ export function parseFileMap(output: string): Record<string, string> {
     return { 'src/App.jsx': output };
   }
 
+  const jsonStr = jsonMatch[0];
+
   try {
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonStr);
     if (typeof parsed === 'object' && parsed !== null) {
       const files: Record<string, string> = {};
       for (const [key, value] of Object.entries(parsed)) {
@@ -128,12 +130,80 @@ export function parseFileMap(output: string): Record<string, string> {
       if (Object.keys(files).length > 0) return files;
     }
   } catch {
-    // JSON parse failed — try regex-based extraction as fallback
-    const files = extractFilesByRegex(output);
-    if (Object.keys(files).length > 0) return files;
+    // JSON parse failed — try fixing common issues
+    const fixed = fixJsonValues(jsonStr);
+    try {
+      const parsed = JSON.parse(fixed);
+      if (typeof parsed === 'object' && parsed !== null) {
+        const files: Record<string, string> = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (typeof value === 'string') {
+            files[key] = value;
+          }
+        }
+        if (Object.keys(files).length > 0) return files;
+      }
+    } catch {
+      // Fixed JSON still failed — try regex-based extraction as final fallback
+      const files = extractFilesByRegex(output);
+      if (Object.keys(files).length > 0) return files;
+    }
   }
 
   return { 'src/App.jsx': output };
+}
+
+/**
+ * Fix common JSON issues from LLM output:
+ * 1. Unescaped newlines inside string values
+ * 2. Unescaped tabs inside string values
+ * This walks the JSON character-by-character to properly fix string values.
+ */
+function fixJsonValues(json: string): string {
+  let result = '';
+  let i = 0;
+  while (i < json.length) {
+    if (json[i] === '"') {
+      // Start of a string — find the end, fixing unescaped chars along the way
+      result += '"';
+      i++;
+      while (i < json.length) {
+        if (json[i] === '\\') {
+          // Already escaped — pass through
+          result += json[i] + (json[i + 1] || '');
+          i += 2;
+          continue;
+        }
+        if (json[i] === '"') {
+          // End of string
+          result += '"';
+          i++;
+          break;
+        }
+        if (json[i] === '\n') {
+          result += '\\n';
+          i++;
+          continue;
+        }
+        if (json[i] === '\r') {
+          result += '\\r';
+          i++;
+          continue;
+        }
+        if (json[i] === '\t') {
+          result += '\\t';
+          i++;
+          continue;
+        }
+        result += json[i];
+        i++;
+      }
+    } else {
+      result += json[i];
+      i++;
+    }
+  }
+  return result;
 }
 
 /**
