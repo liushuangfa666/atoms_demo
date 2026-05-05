@@ -104,9 +104,22 @@ export async function POST(request: NextRequest) {
               userInput: enrichedMessage,
               currentCode: currentCode || prev.currentCode || '',
               mode,
-              // Preserve previous context for LLM
               messages: [...(prev.messages || []), new HumanMessage(message)],
               contextSummary: prev.contextSummary || '',
+              // Preserve critical fields from checkpoint so LLM has full context
+              plan: prev.plan || '',
+              files: prev.files || [],
+              projectType: prev.projectType || 'react-vite',
+              route: prev.route || '',
+              qaResults: prev.qaResults || [],
+              retryCount: prev.retryCount || 0,
+              htmlCode: prev.htmlCode || '',
+              reviewResult: prev.reviewResult || '',
+              chatResponse: prev.chatResponse || '',
+              generationModules: prev.generationModules || [],
+              generatedFiles: prev.generatedFiles || [],
+              currentModuleIndex: prev.currentModuleIndex || 0,
+              apiEndpoints: prev.apiEndpoints || [],
             };
           }
         } catch { /* checkpoint not available, start fresh */ }

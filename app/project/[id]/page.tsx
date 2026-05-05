@@ -407,6 +407,7 @@ export default function ProjectEditor() {
       setCode(p.currentCode);
       setFiles(p.files || []);
       setHasCachedPreview(!!p.previewHtml);
+      if (p.previewHtml) setPreviewHtml(p.previewHtml);
       if (!modeLoadedRef.current) {
         setMode(p.mode || 'engineer');
         prevModeRef.current = p.mode || 'engineer';
@@ -554,7 +555,8 @@ export default function ProjectEditor() {
               <PreviewPanel
                 mode={
                   isFullstack && runner.status === 'running' ? 'server'
-                  : isReactProject && wc.ready && !(hasCachedPreview && !wc.previewUrl) ? 'webcontainer'
+                  : isReactProject && hasCachedPreview ? 'legacy'
+                  : isReactProject && wc.ready && !buildingPreview ? 'webcontainer'
                   : 'legacy'
                 }
                 code={hasCachedPreview && previewHtml ? previewHtml : code}
