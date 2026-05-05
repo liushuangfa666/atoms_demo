@@ -36,6 +36,11 @@ const STUBBED_LIBS: Record<string, string> = {
   'react-countdown': `export default function Countdown(props){return props?.children||null}`,
   'chart.js': `export default{} export function Chart(){}`,
   'react-chartjs-2': `export function Doughnut(props){return null} export function Bar(props){return null} export function Line(props){return null} export function Pie(props){return null}`,
+  '@dnd-kit/core': `export function DndContext(props){return props?.children||null} export function DragOverlay(props){return props?.children||null} export function closestCorners(){return null} export function KeyboardSensor(){return null} export function PointerSensor(){return null} export function useSensor(){return null} export function useSensors(){return[]} export function useDraggable(){return{attributes:{},listeners:{}}} export function useDroppable(){return{setNodeRef:()=>{},isOver:false}}`,
+  '@dnd-kit/sortable': `export function SortableContext(props){return props?.children||null} export function useSortable(){return{attributes:{},listeners:{},setNodeRef:()=>{},transform:null,transition:null}} export function arrayMove(arr){return arr} export function verticalListSortingStrategy(){return null} export function horizontalListSortingStrategy(){return null}`,
+  '@dnd-kit/utilities': `export function CSS(){return{Transform:null}}`,
+  '@hello-pangea/dnd': `export function DragDropContext(props){return props?.children||null} export function Droppable(props){return props?.children({innerRef:()=>{},placeholder:null})||null} export function Draggable(props){return props?.children({innerRef:()=>{},dragHandleProps:{},placeholder:null})||null} export function resetServerContext(){}`,
+  'react-beautiful-dnd': `export function DragDropContext(props){return props?.children||null} export function Droppable(props){return props?.children({innerRef:()=>{},placeholder:null})||null} export function Draggable(props){return props?.children({innerRef:()=>{},dragHandleProps:{},placeholder:null})||null}`,
 };
 
 /**
@@ -128,10 +133,17 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
         }));
 
         // Resolve relative imports within virtual FS
-        build.onResolve({ filter: /^\./ }, (args) => {
+        build.onResolve({ filter: /^\.\.?[/\\]/ }, (args) => {
           if (args.namespace !== VIRTUAL_NS) return null;
           const resolved = resolveRelative(args.importer, args.path, previewFileMap);
           if (resolved) return { path: resolved, namespace: VIRTUAL_NS };
+          // Fallback: try to find the import basename in the file map
+          const baseName = args.path.split('/').pop() || '';
+          for (const [fp] of previewFileMap) {
+            if (fp.endsWith('/' + baseName) || fp.endsWith('/' + baseName + '.js') || fp.endsWith('/' + baseName + '.jsx')) {
+              return { path: fp, namespace: VIRTUAL_NS };
+            }
+          }
           return null;
         });
 
