@@ -425,14 +425,14 @@ export default function ProjectEditor() {
         }).then(r => r.json()).then(result => {
           if (!cancelled && result.size) {
             setHasCachedPreview(true);
-            // Use returned HTML directly (works even without KV)
             if (result.html) {
+              setPreviewHtml(result.html);
               setProject(prev => prev ? { ...prev, previewHtml: result.html } : prev);
             } else {
-              // Fallback: reload project from storage
               getProject(projectId).then(updated => {
                 if (updated && !cancelled) {
                   setProject(updated);
+                  if (updated.previewHtml) setPreviewHtml(updated.previewHtml);
                 }
               });
             }
@@ -564,7 +564,12 @@ export default function ProjectEditor() {
                   isFullstack && runner.previewUrl ? runner.previewUrl
                   : wc.previewUrl
                 }
-                isLoading={buildingPreview || (isFullstack ? runner.status === 'installing' : wc.isInstalling)}
+                isLoading={
+                  // Only show loading spinner during initial generation, not when re-entering
+                  // with existing preview content. Re-building preview is fast (esbuild ~100ms).
+                  (buildingPreview && !(hasCachedPreview && previewHtml)) ||
+                  (isFullstack ? runner.status === 'installing' : wc.isInstalling)
+                }
               />
             )}
             {activeTab === 'code' && (
