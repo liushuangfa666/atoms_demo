@@ -284,11 +284,16 @@ export default function ProjectEditor() {
                 });
               }
 
-              // Also update code for legacy compat
-              const htmlFile = data.files.find((f: ProjectFile) => f.path === 'index.html');
-              if (htmlFile) {
-                currentCode = htmlFile.content;
-                setCode(htmlFile.content);
+              // Don't update code with raw index.html for React projects —
+              // the preview should use the esbuild-bundled HTML instead.
+              // Only set code for non-React (single-HTML) projects.
+              const isReact = data.projectType === 'react-vite' || data.files.some((f: ProjectFile) => f.path === 'vite.config.js');
+              if (!isReact) {
+                const htmlFile = data.files.find((f: ProjectFile) => f.path === 'index.html');
+                if (htmlFile) {
+                  currentCode = htmlFile.content;
+                  setCode(htmlFile.content);
+                }
               }
               saveMessages([...newMessages], currentCode, data.files);
             }
@@ -550,12 +555,12 @@ export default function ProjectEditor() {
                   : isReactProject && wc.ready && !(hasCachedPreview && !wc.previewUrl) ? 'webcontainer'
                   : 'legacy'
                 }
-                code={isReactProject && hasCachedPreview && !wc.previewUrl ? (project?.previewHtml || code) : code}
+                code={hasCachedPreview && project?.previewHtml ? project.previewHtml : code}
                 previewUrl={
                   isFullstack && runner.previewUrl ? runner.previewUrl
                   : wc.previewUrl
                 }
-                isLoading={isFullstack ? runner.status === 'installing' : wc.isInstalling}
+                isLoading={buildingPreview || (isFullstack ? runner.status === 'installing' : wc.isInstalling)}
               />
             )}
             {activeTab === 'code' && (
