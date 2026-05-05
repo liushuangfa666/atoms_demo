@@ -133,7 +133,7 @@ async function plannerNode(state: typeof PipelineState.State) {
 // ── Node 3: Code struct (React project) ────────────────────
 
 async function codeStructNode(state: typeof PipelineState.State) {
-  const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+  const llm = createLLM(150000, "MiniMax-M2.7-highspeed", 300_000);
 
   // Include QA feedback on retry so codegen can fix issues
   let qaFeedback = '';
@@ -165,7 +165,7 @@ async function codeStructNode(state: typeof PipelineState.State) {
 // ── Node 4: Multi-file codegen (React multi-component) ────
 
 async function multiFileCodegenNode(state: typeof PipelineState.State) {
-  const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+  const llm = createLLM(150000, "MiniMax-M2.7-highspeed", 300_000);
   const isFullstack = state.projectType === 'fullstack';
 
   let qaFeedback = '';
@@ -523,7 +523,7 @@ async function chatAgentNode(state: typeof PipelineState.State) {
 // ── Node 9: Single agent code generator (engineer mode) ─
 
 async function singleCodeNode(state: typeof PipelineState.State) {
-  const llm = createLLM(32768, "MiniMax-M2.7-highspeed", 300_000);
+  const llm = createLLM(150000, "MiniMax-M2.7-highspeed", 300_000);
   const contextAddition = state.contextSummary ? `\n\n上下文摘要: ${state.contextSummary}` : '';
   const currentFiles = state.files || [];
 
@@ -700,7 +700,7 @@ const builder = new StateGraph(PipelineState)
   .addNode("planner", plannerNode)
   .addNode("code_struct", codeStructNode)
   .addNode("multi_file_codegen", multiFileCodegenNode)
-  .addNode("batch_codegen", batchCodegenNode)
+
   .addNode("merge", mergeNode)
   .addNode("qa_reviewer", qaReviewerNode)
   .addNode("modifier", modifierNode)
@@ -731,31 +731,16 @@ const builder = new StateGraph(PipelineState)
   .addConditionalEdges("planner", (state) => {
     if (state.route === "need_input") return "end";
     if (state.projectType === "fullstack") return "multi_file_codegen";
-    // Use batch codegen when planner produced multiple modules
-    if (state.generationModules && state.generationModules.length > 1) return "batch_codegen";
     return "code_struct";
   }, {
     "code_struct": "code_struct",
     "multi_file_codegen": "multi_file_codegen",
-    "batch_codegen": "batch_codegen",
     "end": END,
   })
 
   // Code struct → merge → QA
   .addEdge("code_struct", "merge")
   .addEdge("multi_file_codegen", "merge")
-  // batch_codegen loops until all modules done
-  .addConditionalEdges("batch_codegen", (state) => {
-    const modules = state.generationModules || [];
-    const currentIndex = state.currentModuleIndex || 0;
-    if (currentIndex < modules.length) {
-      return "batch_codegen"; // more batches needed
-    }
-    return "merge"; // all done
-  }, {
-    "batch_codegen": "batch_codegen",
-    "merge": "merge",
-  })
   .addEdge("merge", "qa_reviewer")
 
   // QA reviewer → pass or retry
@@ -765,13 +750,11 @@ const builder = new StateGraph(PipelineState)
     const retries = state.retryCount || 0;
     if (retries >= 3) return "end"; // max 3 retries (4 total attempts)
     if (state.route === "modify") return "modifier";
-    if (state.generationModules && state.generationModules.length > 1) return "batch_codegen";
     return "code_struct";
   }, {
     "end": END,
     "modifier": "modifier",
     "code_struct": "code_struct",
-    "batch_codegen": "batch_codegen",
   })
 
   // Modifier → QA
