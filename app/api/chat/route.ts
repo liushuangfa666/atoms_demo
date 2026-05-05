@@ -199,6 +199,7 @@ export async function POST(request: NextRequest) {
       }, 15_000);
 
       try {
+        let capturedModules: Array<{name: string; files: string[]; description: string}> = [];
         for await (const chunk of graphStream) {
           // Stop processing if client disconnected
           if (clientDisconnected) break;
@@ -250,6 +251,10 @@ export async function POST(request: NextRequest) {
               }
 
               if (nodeName === 'planner') {
+                // Capture modules for batch progress reporting
+                if (output.generationModules && output.generationModules.length > 0) {
+                  capturedModules = output.generationModules;
+                }
                 if (output.route === 'need_input') {
                   await writer.write(encoder.encode(sseMessage({
                     type: 'need_input',
@@ -298,7 +303,7 @@ export async function POST(request: NextRequest) {
               if (nodeName === 'batch_codegen') {
                 const newFiles = output.generatedFiles || [];
                 const moduleIndex = output.currentModuleIndex || 0;
-                const totalModules = (stateSnapshot?.values?.generationModules || []).length || 0;
+                const totalModules = capturedModules.length || 0;
 
                 if (output.files && output.files.length > 0) {
                   // Final batch: all files complete

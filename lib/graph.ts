@@ -243,8 +243,10 @@ const LANG_MAP: Record<string, string> = {
 
 async function batchCodegenNode(state: typeof PipelineState.State) {
   const modules = state.generationModules || [];
-  const currentIndex = state.currentModuleIndex || 0;
-  const alreadyGenerated = state.generatedFiles || [];
+  const isRetry = (state.retryCount || 0) > 0 && (state.generatedFiles || []).length > 0;
+  // Reset index on retry so full generation runs again
+  const currentIndex = isRetry ? 0 : (state.currentModuleIndex || 0);
+  const alreadyGenerated = isRetry ? [] : (state.generatedFiles || []);
 
   // Fallback to single-shot if no modules
   if (modules.length === 0) {
@@ -759,7 +761,9 @@ const builder = new StateGraph(PipelineState)
   // QA reviewer → pass or retry
   .addConditionalEdges("qa_reviewer", (state) => {
     if (state.reviewResult === "pass") return "end";
-    if (state.retryCount >= 2) return "end"; // max 3 attempts
+    // Hard limit: retryCount is incremented by qa_reviewer each time
+    const retries = state.retryCount || 0;
+    if (retries >= 3) return "end"; // max 3 retries (4 total attempts)
     if (state.route === "modify") return "modifier";
     if (state.generationModules && state.generationModules.length > 1) return "batch_codegen";
     return "code_struct";

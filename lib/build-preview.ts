@@ -143,7 +143,7 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
           const content = previewFileMap.get(args.path);
           if (content !== undefined) {
             const ext = args.path.split('.').pop() || '';
-            const loader: esbuild.Loader = ['jsx', 'tsx'].includes(ext) ? 'jsx' : 'js';
+            const loader: esbuild.Loader = ['jsx', 'tsx'].includes(ext) ? 'tsx' : 'js';
             return { contents: content, loader, resolveDir };
           }
           return null;
