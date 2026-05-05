@@ -570,16 +570,16 @@ async function qaReviewerNode(state: typeof PipelineState.State) {
   // Tier 2: LLM-powered review (only if we have a plan)
   if (state.plan && appFile && appFile.content.length > 50) {
     try {
-      const llm = createLLM(2048);
-      const codeSnippet = appFile.content.length > 3000
-        ? appFile.content.substring(0, 3000) + '\n... (truncated)'
-        : appFile.content;
+      const llm = createLLM(4096);
+
+      // Build full code context from all files (not just App.jsx, not truncated)
+      const allCode = files.map(f => `// === ${f.path} ===\n${f.content}`).join('\n\n');
 
       // Try tool calling first
       const llmWithTools = bindLLMTools(llm, QA_TOOLS);
       const response = await llmWithTools.invoke([
         new SystemMessage(SYSTEM_PROMPTS.qaReviewer),
-        new HumanMessage(`产品规划:\n${getTrimmedPlan(state.plan)}${contextSummaryBlock(state.contextSummary)}\n\n生成的 React 代码:\n${codeSnippet}\n\n请检查代码是否实现了规划中的功能。使用 report_issue 报告每个问题，或用 approve_code 表示通过。`),
+        new HumanMessage(`产品规划:\n${getTrimmedPlan(state.plan)}${contextSummaryBlock(state.contextSummary)}\n\n生成的项目代码:\n${allCode}\n\n请检查代码是否实现了规划中的功能。使用 report_issue 报告每个问题，或用 approve_code 表示通过。`),
       ]) as AIMessage;
 
       const toolCalls = extractToolCalls(response);
@@ -849,14 +849,12 @@ async function modeUpgradeNode(state: typeof PipelineState.State) {
 
   if (appFile) {
     try {
-      const qaLlm = createLLM(2048);
-      const codeSnippet = appFile.content.length > 3000
-        ? appFile.content.substring(0, 3000) + '\n... (truncated)'
-        : appFile.content;
+      const qaLlm = createLLM(4096);
+      const allCode = currentFiles.map(f => `// === ${f.path} ===\n${f.content}`).join('\n\n');
 
       const qaResponse = await qaLlm.invoke([
         new SystemMessage(SYSTEM_PROMPTS.qaReviewer),
-        new HumanMessage(`请审查以下 React 代码的质量和最佳实践：\n\n${codeSnippet}\n\n输出 JSON 格式的检查结果。`),
+        new HumanMessage(`请审查以下 React 代码的质量和最佳实践：\n\n${allCode}\n\n输出 JSON 格式的检查结果。`),
       ]);
 
       let qaText = (qaResponse.content as string).trim();
