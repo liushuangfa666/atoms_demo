@@ -1,5 +1,209 @@
 import { Agent } from './types';
 
+// ── Tool definitions for structured LLM output ──
+
+export interface ToolDef {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: 'object';
+      properties: Record<string, any>;
+      required: string[];
+    };
+  };
+}
+
+/** Codegen: write a single file */
+export const WRITE_FILE_TOOL: ToolDef = {
+  type: 'function',
+  function: {
+    name: 'write_file',
+    description: '将一个文件写入项目。对项目中的每个文件分别调用一次。' +
+      'React 项目路径以 src/ 开头；全栈项目前端以 frontend/src/ 开头，后端以 backend/ 开头。' +
+      '不要生成 package.json、vite.config.js、index.html、src/main.jsx、src/index.css，这些由系统自动提供。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: '文件路径，如 src/App.jsx 或 src/components/Header.jsx',
+        },
+        content: {
+          type: 'string',
+          description: '文件完整内容',
+        },
+      },
+      required: ['path', 'content'],
+    },
+  },
+};
+
+/** Planner: define project plan with modules */
+export const CREATE_PLAN_TOOL: ToolDef = {
+  type: 'function',
+  function: {
+    name: 'create_plan',
+    description: '定义项目的产品规划和文件结构。当需求足够清晰时调用此工具。',
+    parameters: {
+      type: 'object',
+      properties: {
+        plan: {
+          type: 'string',
+          description: '功能模块和交互流程的描述，用中文，3-8 个功能模块',
+        },
+        modules: {
+          type: 'array',
+          description: '按依赖顺序排列的代码模块列表',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: '模块名称' },
+              files: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '该模块包含的文件路径列表',
+              },
+              description: { type: 'string', description: '模块功能描述' },
+            },
+            required: ['name', 'files', 'description'],
+          },
+        },
+        apiEndpoints: {
+          type: 'array',
+          description: 'API 接口定义（仅全栈项目需要）',
+          items: {
+            type: 'object',
+            properties: {
+              method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'] },
+              path: { type: 'string', description: '如 /api/products' },
+              description: { type: 'string' },
+            },
+            required: ['method', 'path', 'description'],
+          },
+        },
+      },
+      required: ['plan', 'modules'],
+    },
+  },
+};
+
+/** Planner: ask user for clarification */
+export const ASK_CLARIFICATION_TOOL: ToolDef = {
+  type: 'function',
+  function: {
+    name: 'ask_clarification',
+    description: '当用户需求完全无法理解时，向用户提出 1-2 个简洁具体的问题。',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: '向用户提出的问题',
+        },
+      },
+      required: ['question'],
+    },
+  },
+};
+
+/** QA: report a single issue */
+export const REPORT_ISSUE_TOOL: ToolDef = {
+  type: 'function',
+  function: {
+    name: 'report_issue',
+    description: '报告一个代码问题。对每个发现的问题分别调用一次。',
+    parameters: {
+      type: 'object',
+      properties: {
+        severity: {
+          type: 'string',
+          enum: ['error', 'warning', 'info'],
+          description: 'error=功能缺失/JS错误, warning=质量/响应式, info=建议',
+        },
+        category: {
+          type: 'string',
+          enum: ['interaction', 'functionality', 'react', 'security', 'responsive', 'quality', 'frontend', 'backend', 'integration'],
+          description: '问题类别',
+        },
+        message: { type: 'string', description: '问题描述' },
+        file: { type: 'string', description: '相关文件路径' },
+        suggestion: { type: 'string', description: '修复建议' },
+      },
+      required: ['severity', 'category', 'message'],
+    },
+  },
+};
+
+/** QA: approve the code */
+export const APPROVE_CODE_TOOL: ToolDef = {
+  type: 'function',
+  function: {
+    name: 'approve_code',
+    description: '当代码质量合格、没有严重问题时，调用此工具表示审查通过。',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: '审查通过的简要总结' },
+      },
+      required: ['summary'],
+    },
+  },
+};
+
+/** All codegen tools (write_file only) */
+export const CODEGEN_TOOLS: ToolDef[] = [WRITE_FILE_TOOL];
+
+/** All planner tools */
+export const PLANNER_TOOLS: ToolDef[] = [CREATE_PLAN_TOOL, ASK_CLARIFICATION_TOOL];
+
+/** All QA tools */
+export const QA_TOOLS: ToolDef[] = [REPORT_ISSUE_TOOL, APPROVE_CODE_TOOL];
+
+// ── File path validation ──
+
+const BASE_FILES = new Set([
+  'package.json', 'vite.config.js', 'index.html',
+  'src/main.jsx', 'src/index.css',
+  'frontend/package.json', 'frontend/vite.config.js', 'frontend/index.html',
+  'frontend/src/main.jsx', 'frontend/src/index.css',
+  'backend/package.json',
+]);
+
+/**
+ * Validate and fix file path from LLM tool call.
+ * Returns normalized path or null if invalid.
+ */
+export function validateToolFilePath(path: string, projectType: string): string | null {
+  // Normalize backslashes
+  let normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
+
+  // Reject base files (auto-generated)
+  if (BASE_FILES.has(normalized)) return null;
+
+  if (projectType === 'fullstack') {
+    // Fullstack: frontend/src/... or backend/...
+    if (normalized.startsWith('frontend/src/') || normalized.startsWith('backend/')) {
+      return normalized;
+    }
+    // Auto-fix: if it looks like a React file without prefix
+    if (normalized.startsWith('src/')) return `frontend/${normalized}`;
+    if (normalized.endsWith('.jsx') || normalized.endsWith('.tsx')) return `frontend/src/${normalized}`;
+    return null;
+  }
+
+  // React-vite: src/...
+  if (normalized.startsWith('src/')) return normalized;
+  // Auto-fix: common mistake
+  if (normalized.endsWith('.jsx') || normalized.endsWith('.tsx') || normalized.endsWith('.js')) {
+    return `src/${normalized}`;
+  }
+  return null;
+}
+
+// ── Agents metadata ──
+
 export const agents: Record<string, Agent> = {
   mike: {
     id: 'mike',
