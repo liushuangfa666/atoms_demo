@@ -29,7 +29,7 @@ START
 |------|------|-----------|------|
 | 管线框架 | LangGraph 状态机 | 自定义 while 循环 | 条件路由、检查点持久化、重试拓扑开箱即用 |
 | LLM 后端 | MiniMax M2.7-highspeed | OpenAI GPT-4 / Claude | 国内低延迟、成本可控、150K token 上限 |
-| Token 限制 | 150,000 maxTokens | 分批生成（batch codegen） | 分批机制引入了循环状态管理的复杂性（`currentModuleIndex` 边界 bug），直接给足 token 更稳定 |
+| Token 压缩 | 20k tokens触发 | 整体压缩 | 整体压缩信息丢失过多，控制每次对话存入上下文的tokens配合摘要压缩完成上下文管理 |
 | 代码解析 | 三级 fallback JSON 解析 | 仅 JSON.parse | LLM 输出中常含未转义换行符，需要 `fixJsonValues` + 正则兜底 |
 
 ### 1.2 预览系统：三层架构
@@ -68,6 +68,22 @@ LLM 对话随轮次增长会超出 token 限制，采用压缩策略：
 
 ## 二、当前完成程度
 
+### 与 atoms.dev（官方产品）对比
+
+| 能力维度 | atoms.dev | 本项目 | 差距 |
+|----------|-----------|--------|------|
+| **Agent 数量** | 7 个（Deep Researcher、Architect、PM、Team Leader、SEO、Engineer、Data Analyst） | 4 个（Mike/Team Leader、Emma/PM、Alex/Engineer、QA） | 缺少 Deep Researcher、Architect、SEO Specialist、Data Analyst |
+| **交互方式** | 对话 + 可视化拖拽编辑器（Visual Editor） | 纯对话 | 缺少 Visual Editor |
+| **项目类型** | 单页 + React + Fullstack + 移动端 | single-html / react-vite / fullstack | 缺少移动端模板 |
+| **后端服务** | Atoms Cloud（用户登录、数据库、Stripe 支付、API 托管） | 仅代码生成，无运行时后端 | 缺少 BaaS 能力 |
+| **模型选择** | Race Mode（多模型竞赛，用户选最优） | 单一 MiniMax M2.7 | 缺少多模型支持 |
+| **预览** | 实时预览 + 即时发布（自带域名） | esbuild/WebContainer/Server Runner 本地预览 | 缺少发布/托管 |
+| **代码编辑** | 在线编辑器（可编辑 + 实时生效） | 只读代码展示 | 缺少在线编辑 |
+| **AI 集成** | 内置 AI 功能（聊天、推荐、搜索即插即用） | 无 | 缺少 AI 组件库 |
+| **部署** | 一键发布到 atoms.dev 子域名 | ZIP 下载到本地 | 缺少部署集成 |
+| **协作** | 项目分享、多人协作 | 无 | 缺少分享/协作 |
+| **GitHub** | 双向同步 | 无 | 缺少版本控制集成 |
+
 ### 已完成功能
 
 | 模块 | 功能 | 状态 |
@@ -77,22 +93,23 @@ LLM 对话随轮次增长会超出 token 限制，采用压缩策略：
 | **三种项目类型** | single-html / react-vite / fullstack | ✅ 完成 |
 | **Router** | 意图识别（新建/修改/提问） | ✅ 完成 |
 | **Planner** | JSON 结构化规划 + 澄清问题 | ✅ 完成 |
-| **CodeGen** | 150K token 限制，单次完整生成 | ✅ 完成 |
-| **QA Reviewer** | 自动代码审查 + 最多 3 次重试 | ✅ 完成 |
-| **Modifier** | 基于上下文的增量修改 | ✅ 完成 |
+| **CodeGen** | 150K token 限制，Tool Calling + 三级 fallback | ✅ 完成 |
+| **QA Reviewer** | 自动代码审查（全文件）+ 最多 3 次重试 | ✅ 完成 |
+| **Modifier** | 基于上下文的增量修改（Tool Calling） | ✅ 完成 |
 | **esbuild 预览** | 虚拟 FS + STUBBED_LIBS + 内联打包 | ✅ 完成 |
 | **WebContainer** | 浏览器端 Vite 运行时 | ✅ 完成（基础集成） |
 | **Server Runner** | fullstack 项目服务器端运行 | ✅ 完成（基础集成） |
-| **SSE 流式** | token/progress/files_generated/qa_result/build_error | ✅ 完成 |
+| **SSE 流式** | token/progress/files_generated/qa_result/build_error/batch_progress | ✅ 完成 |
 | **文件树** | 多文件展示 + 点击编辑 | ✅ 完成 |
 | **项目持久化** | Redis KV + localStorage fallback | ✅ 完成 |
-| **上下文压缩** | LLM 摘要压缩长对话 | ✅ 完成 |
-| **Checkpointer** | LangGraph 状态持久化到 Redis | ✅ 完成 |
-| **JSON 解析** | 三级 fallback（parse → fixValues → regex） | ✅ 完成 |
+| **上下文压缩** | LLM 摘要压缩长对话（全量内容送压缩） | ✅ 完成 |
+| **Checkpointer** | LangGraph 状态持久化到 Redis（含断点恢复） | ✅ 完成 |
+| **Tool Calling** | 5 个工具（write_file/create_plan/ask_clarification/report_issue/approve_code） | ✅ 完成 |
 | **Mode Upgrade** | engineer → team 升级（补 planner + QA） | ✅ 完成 |
 | **Showcase** | 6 个预置示例项目（AI chatbot、Dashboard 等） | ✅ 完成 |
 | **下载** | ZIP 导出生成项目 | ✅ 完成 |
 | **构建错误诊断** | esbuild 结构化错误 → SSE 推送到前端 | ✅ 完成 |
+| **进程管理** | pm2 后台运行 + 自动重启 + 开机启动 | ✅ 完成 |
 
 ### 已知问题 / 未完成
 
@@ -106,12 +123,20 @@ LLM 对话随轮次增长会超出 token 限制，采用压缩策略：
 | 代码编辑 | ❌ 只读 | CodeEditor 只展示不编辑 |
 | 错误恢复 | ⚠️ 基础 | LLM 超时/格式错误有 fallback，但无用户重试 UI |
 | 响应式设计 | ⚠️ 部分 | 主要为桌面优化，移动端体验一般 |
+| Visual Editor | ❌ 未做 | 无拖拽编辑器（atoms.dev 核心差异） |
+| 后端即服务 | ❌ 未做 | 无用户登录/数据库/支付集成 |
+| 多模型竞赛 | ❌ 未做 | 无 Race Mode |
+| 部署/托管 | ❌ 未做 | 无一键发布 |
+| SEO Agent | ❌ 未做 | 无 SEO 优化能力 |
+| Data Analyst Agent | ❌ 未做 | 无数据分析 Agent |
 
 ---
 
 ## 三、未来扩展路线图（按优先级）
 
-### P0 — 立即可做（1-3 天）
+> 基于 atoms.dev 官方产品对比，聚焦补齐核心差距
+
+### P0 
 
 1. **项目列表加载优化**
    - 当前: N+1 串行 API 请求 + iframe 缩略图
@@ -121,14 +146,14 @@ LLM 对话随轮次增长会超出 token 限制，采用压缩策略：
 2. **代码编辑器可编辑**
    - 当前: CodeEditor 只读
    - 方案: 接入 Monaco Editor 或 CodeMirror，修改后触发重新预览
-   - 影响: 用户可手动修复小问题，减少 LLM 重试
+   - 影响: 用户可手动修复小问题，减少 LLM 重试；atoms.dev 的基础能力
 
 3. **LLM 错误用户重试**
    - 当前: 生成失败只显示错误，用户需重新描述
    - 方案: 添加"重新生成"按钮，携带上次失败原因重试
    - 影响: 减少用户挫败感
 
-### P1 — 短期（1-2 周）
+### P1 
 
 4. **对话历史恢复**
    - 当前: 刷新页面后对话历史从 KV 恢复但管线状态丢失
@@ -145,33 +170,51 @@ LLM 对话随轮次增长会超出 token 限制，采用压缩策略：
    - 方案: 文件变更时通过 SSE 通知 Runner 重启、添加日志流
    - 影响: 全栈项目可实时预览
 
-### P2 — 中期（2-4 周）
+7. **Race Mode（多模型竞赛）**
+   - 当前: 单一 MiniMax M2.7
+   - 方案: 并行调用 2-3 个模型（MiniMax / DeepSeek / Qwen），展示多个结果供用户选择最优
+   - 影响: atoms.dev 的核心差异化功能，提升生成质量
+   - 参考: atoms.dev Race Mode
 
-7. **用户认证**
+### P2
+
+8. **用户认证**
    - 方案: NextAuth.js + GitHub/Google OAuth
-   - 影响: 项目绑定真实用户，支持协作和分享
+   - 影响: 项目绑定真实用户，是协作和分享的前提
 
-8. **项目分享**
+9. **项目分享**
    - 方案: 生成只读分享链接，访客可查看代码和预览
    - 影响: 产品可传播性
 
-9. **多 LLM 后端**
-   - 当前: 仅 MiniMax
-   - 方案: 支持 OpenAI、Claude、DeepSeek 等多个后端，用户可选
-   - 影响: 灵活应对不同场景（成本、质量、速度）
+10. **Visual Editor（可视化编辑器）**
+    - 当前: 纯对话交互
+    - 方案: 拖拽式 UI 编辑器 + 对话生成联动（类似 atoms.dev Visual Editor）
+    - 影响: atoms.dev 最大的差异化功能，降低非技术用户门槛
+    - 参考: atoms.dev 可视化拖拽编辑
 
-10. **模板系统增强**
-    - 当前: Showcase 是硬编码的 6 个示例
-    - 方案: 支持用户自定义模板、从生成项目中提取模板
-    - 影响: 降低新用户上手门槛
+11. **后端即服务（BaaS）**
+    - 当前: 仅代码生成，无运行时后端
+    - 方案: 内置用户登录、数据库（SQLite/PostgreSQL）、Stripe 支付、API 托管
+    - 影响: atoms.dev Atoms Cloud 的核心价值，让全栈项目真正可运行
+    - 参考: atoms.dev 内置用户登录 + 数据库 + Stripe 支付
+
+12. **SEO Agent**
+    - 当前: 无 SEO 能力
+    - 方案: 新增 SEO Specialist Agent，自动生成 meta tags、结构化数据、sitemap
+    - 影响: atoms.dev 有专门的 SEO Agent
 
 ### P3 — 远期
 
-11. **实时协作编辑** — 多人同时编辑同一项目
-12. **部署集成** — 一键部署到 Vercel/Cloudflare
-13. **版本控制** — 项目快照、回滚、diff 对比
-14. **插件系统** — 自定义 Agent、自定义预览渲染器
-15. **移动端适配** — 响应式布局优化
+13. **部署集成** — 一键部署到 Vercel/Cloudflare 或自有域名（atoms.dev 有即时发布）
+14. **GitHub 同步** — 双向同步项目代码到 GitHub 仓库
+15. **实时协作编辑** — 多人同时编辑同一项目
+16. **版本控制** — 项目快照、回滚、diff 对比
+17. **Data Analyst Agent** — 数据分析与可视化 Agent
+18. **Deep Researcher Agent** — 深度研究 Agent，生成前调研技术方案
+19. **Architect Agent** — 架构设计 Agent，负责系统架构决策
+20. **AI 集成组件库** — 内置聊天、推荐、搜索等 AI 功能即插即用
+21. **插件系统** — 自定义 Agent、自定义预览渲染器
+22. **移动端适配** — 响应式布局优化
 
 ---
 
