@@ -70,7 +70,7 @@ function extractToolCalls(response: AIMessage): ToolCall[] {
     for (const tc of response.tool_calls) {
       calls.push({ name: tc.name, args: tc.args as Record<string, any> });
     }
-    return calls;
+    if (calls.length > 0) return calls;
   }
 
   // Fallback: OpenAI-style additional_kwargs
