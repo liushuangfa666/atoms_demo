@@ -51,31 +51,20 @@ function buildContextText(state: Record<string, any>): string {
   const parts: string[] = [];
   if (state.userInput) parts.push(`[用户需求] ${state.userInput}`);
   if (state.contextSummary) parts.push(`[之前的上下文摘要] ${state.contextSummary}`);
-  if (state.plan) parts.push(`[产品规划] ${trimToolCallContent(state.plan)}`);
+  if (state.plan) parts.push(`[产品规划] ${state.plan}`);
   if (state.reviewResult) parts.push(`[QA审查结果] ${state.reviewResult}`);
-  if (state.currentCode) {
-    const code = state.currentCode;
-    const snippet = code.length > 2000
-      ? code.substring(0, 1000) + '\n...\n' + code.substring(code.length - 1000)
-      : code;
-    parts.push(`[当前代码] ${snippet}`);
-  }
+  if (state.currentCode) parts.push(`[当前代码] ${state.currentCode}`);
   if (state.files && state.files.length > 0) {
-    const fileSummaries = state.files.map((f: any) => {
-      const content = f.content || '';
-      const snippet = content.length > 500
-        ? content.substring(0, 250) + '\n...\n' + content.substring(content.length - 250)
-        : content;
-      return `[${f.path}] (${content.length} chars)\n${snippet}`;
-    });
-    parts.push(`[项目文件]\n${fileSummaries.join('\n\n')}`);
+    const fileContents = state.files.map((f: any) =>
+      `[${f.path}]\n${f.content || ''}`
+    );
+    parts.push(`[项目文件]\n${fileContents.join('\n\n')}`);
   }
   if (state.messages && state.messages.length > 0) {
-    const recent = state.messages.slice(-10);
-    for (const m of recent) {
+    for (const m of state.messages) {
       const role = m._getType ? m._getType() : (m.role || 'unknown');
       const content = typeof m.content === 'string' ? m.content : '';
-      parts.push(`[${role}] ${content.substring(0, 500)}`);
+      parts.push(`[${role}] ${content}`);
     }
   }
   return parts.join('\n\n');

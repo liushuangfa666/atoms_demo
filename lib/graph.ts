@@ -49,10 +49,15 @@ function createLLM(maxTokens = 8192, modelName = "MiniMax-M2.7", timeout = 120_0
 
 const fastLLM = () => createLLM(16384, "MiniMax-M2.7-highspeed");
 
-// Helper: get trimmed plan for context (30-40-30 split)
-function getPlanForContext(plan: string, contextSummary?: string): string {
-  if (contextSummary) return contextSummary;
+// Helper: get trimmed plan — plan is always preserved for codegen
+function getTrimmedPlan(plan: string): string {
   return trimToolCallContent(plan || '');
+}
+
+// Helper: build contextSummary supplement block (empty string if none)
+function contextSummaryBlock(contextSummary?: string): string {
+  if (!contextSummary) return '';
+  return `\n\n--- 历史上下文摘要 ---\n${contextSummary}`;
 }
 
 // ── Node 1: Router ─────────────────────────────────────
@@ -146,7 +151,7 @@ async function codeStructNode(state: typeof PipelineState.State) {
 
   const response = await llm.invoke([
     new SystemMessage(SYSTEM_PROMPTS.codeStruct),
-    new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${qaFeedback}`),
+    new HumanMessage(`产品规划:\n${getTrimmedPlan(state.plan)}${contextSummaryBlock(state.contextSummary)}\n\n用户需求: ${state.userInput}${qaFeedback}`),
   ]);
 
   let text = (response.content as string).trim();
@@ -184,7 +189,7 @@ async function multiFileCodegenNode(state: typeof PipelineState.State) {
 
   const response = await llm.invoke([
     new SystemMessage(prompt),
-    new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${apiContext}${qaFeedback}`),
+    new HumanMessage(`产品规划:\n${getTrimmedPlan(state.plan)}${contextSummaryBlock(state.contextSummary)}\n\n用户需求: ${state.userInput}${apiContext}${qaFeedback}`),
   ]);
 
   let text = (response.content as string).trim();
@@ -291,7 +296,7 @@ ${batchModules.map(m => `模块「${m.name}」(${m.description}): ${m.files.join
   const response = await llm.invoke([
     new SystemMessage(batchPrompt),
     new HumanMessage(
-      `产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n用户需求: ${state.userInput}${generatedSummary}${upcomingSummary}${qaFeedback}`
+      `产品规划:\n${getTrimmedPlan(state.plan)}${contextSummaryBlock(state.contextSummary)}\n\n用户需求: ${state.userInput}${generatedSummary}${upcomingSummary}${qaFeedback}`
     ),
   ]);
 
@@ -422,7 +427,7 @@ async function qaReviewerNode(state: typeof PipelineState.State) {
 
       const response = await llm.invoke([
         new SystemMessage(SYSTEM_PROMPTS.qaReviewer),
-        new HumanMessage(`产品规划:\n${getPlanForContext(state.plan, state.contextSummary)}\n\n生成的 React 代码:\n${codeSnippet}\n\n请检查代码是否实现了规划中的功能。`),
+        new HumanMessage(`产品规划:\n${getTrimmedPlan(state.plan)}${contextSummaryBlock(state.contextSummary)}\n\n生成的 React 代码:\n${codeSnippet}\n\n请检查代码是否实现了规划中的功能。`),
       ]);
 
       let qaText = (response.content as string).trim();
