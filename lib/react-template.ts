@@ -119,7 +119,6 @@ export function parseFileMap(output: string): Record<string, string> {
   try {
     const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed === 'object' && parsed !== null) {
-      // Validate that values are strings
       const files: Record<string, string> = {};
       for (const [key, value] of Object.entries(parsed)) {
         if (typeof value === 'string') {
@@ -129,10 +128,35 @@ export function parseFileMap(output: string): Record<string, string> {
       if (Object.keys(files).length > 0) return files;
     }
   } catch {
-    // Not valid JSON
+    // JSON parse failed — try regex-based extraction as fallback
+    const files = extractFilesByRegex(output);
+    if (Object.keys(files).length > 0) return files;
   }
 
   return { 'src/App.jsx': output };
+}
+
+/**
+ * Fallback file extraction using regex when JSON.parse fails.
+ * Handles cases where LLM generates JSON with unescaped characters in values.
+ */
+function extractFilesByRegex(output: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  // Match "path/to/file.ext": "...content..."
+  // File paths: src/..., app/..., components/..., etc.
+  const pattern = /"((?:src|app|components|pages|lib|hooks|data|utils|styles|public|frontend)[/\w]*\.(?:jsx?|tsx?|css|json|html?|svg|md))"\s*:\s*"([\s\S]*?)"(?:\s*[,\}])/g;
+  let match;
+  while ((match = pattern.exec(output)) !== null) {
+    const [, filePath, content] = match;
+    // Unescape basic JSON string escapes
+    files[filePath] = content
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\r/g, '\r')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+  }
+  return files;
 }
 
 /**
