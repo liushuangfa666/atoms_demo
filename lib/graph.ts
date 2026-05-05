@@ -330,7 +330,7 @@ ${batchModules.map(m => `模块「${m.name}」(${m.description}): ${m.files.join
           allGenerated.push({ path, content, language: LANG_MAP[path.split('.').pop() || ''] || 'text' });
         }
       }
-      return { files: allGenerated, projectType: 'fullstack' as const, generatedFiles: allGenerated };
+      return { files: allGenerated, projectType: 'fullstack' as const, generatedFiles: allGenerated, currentModuleIndex: batchEnd };
     }
 
     const baseFiles = getBaseFiles();
@@ -339,7 +339,7 @@ ${batchModules.map(m => `模块「${m.name}」(${m.description}): ${m.files.join
         allGenerated.push({ path, content, language: LANG_MAP[path.split('.').pop() || ''] || 'text' });
       }
     }
-    return { files: allGenerated, projectType: 'react-vite' as const, generatedFiles: allGenerated };
+    return { files: allGenerated, projectType: 'react-vite' as const, generatedFiles: allGenerated, currentModuleIndex: batchEnd };
   }
 
   // More batches to go — return partial state
