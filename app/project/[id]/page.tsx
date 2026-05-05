@@ -48,6 +48,7 @@ export default function ProjectEditor() {
   const isFullstack = project?.projectType === 'fullstack';
   const [hasCachedPreview, setHasCachedPreview] = useState(false);
   const [buildingPreview, setBuildingPreview] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
 
   const saveMessages = useCallback((msgs: Message[], newCode?: string, newFiles?: ProjectFile[]) => {
     const updates: Partial<Project> = { messages: msgs };
@@ -266,6 +267,7 @@ export default function ProjectEditor() {
                 }).then(r => r.json()).then(result => {
                   if (result.size && result.html) {
                     setHasCachedPreview(true);
+                    setPreviewHtml(result.html);
                     setProject(prev => prev ? { ...prev, previewHtml: result.html } : prev);
                     termLog(`\x1b[32m[Preview] 预览构建完成: ${(result.size / 1024).toFixed(1)}KB\x1b[0m`);
                   } else if (result.size) {
@@ -555,7 +557,7 @@ export default function ProjectEditor() {
                   : isReactProject && wc.ready && !(hasCachedPreview && !wc.previewUrl) ? 'webcontainer'
                   : 'legacy'
                 }
-                code={hasCachedPreview && project?.previewHtml ? project.previewHtml : code}
+                code={hasCachedPreview && previewHtml ? previewHtml : code}
                 previewUrl={
                   isFullstack && runner.previewUrl ? runner.previewUrl
                   : wc.previewUrl
